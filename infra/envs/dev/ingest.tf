@@ -142,26 +142,6 @@ resource "aws_lambda_function" "ingest" {
   }
 }
 
-# ===========================================================
-#  Meal Enricher Lambda – placeholder for Nutritionix logic
-# ===========================================================
-
-resource "aws_lambda_function" "meal_enricher" {
-  function_name    = "hb_meal_enricher_dev"
-  runtime          = "python3.11"
-  handler          = "meal_enricher.lambda_handler"
-  role             = aws_iam_role.lambda_exec.arn
-  filename         = "${path.module}/lambda_meal_enricher.zip"
-  source_code_hash = filebase64sha256("${path.module}/lambda_meal_enricher.zip")
-  timeout          = 30
-
-  environment {
-    variables = {
-      ENVIRONMENT = "dev"
-    }
-  }
-}
-
 # Optional SNS or Dynamo triggers can be added later
 output "meal_enricher_arn" {
   value = aws_lambda_function.meal_enricher.arn
