@@ -35,8 +35,8 @@ resource "aws_dynamodb_table" "events" {
   name         = local.events_table
   billing_mode = "PAY_PER_REQUEST"
 
-  hash_key  = "pk"   # user id or "me"
-  range_key = "sk"   # ISO8601 timestamp
+  hash_key  = "pk" # user id or "me"
+  range_key = "sk" # ISO8601 timestamp
 
   attribute {
     name = "pk"
@@ -68,18 +68,6 @@ resource "aws_dynamodb_table" "events" {
   tags = { Project = local.project_name, Env = local.env }
 }
 
-
-# --- PACKAGE LAMBDA CODE ---
-data "archive_file" "ingest_zip" {
-  type        = "zip"
-  output_path = "${path.module}/lambda_ingest.zip"
-
-  source {
-    content  = file("${path.module}/lambda/ingest.py")
-    filename = "ingest.py"
-  }
-}
-
 # --- LAMBDA ROLE + POLICY ---
 data "aws_iam_policy_document" "lambda_assume" {
   statement {
@@ -98,18 +86,18 @@ resource "aws_iam_role" "ingest_role" {
 
 data "aws_iam_policy_document" "ingest_policy" {
   statement {
-    sid     = "WriteS3"
-    actions = ["s3:PutObject", "s3:PutObjectAcl"]
+    sid       = "WriteS3"
+    actions   = ["s3:PutObject", "s3:PutObjectAcl"]
     resources = ["${aws_s3_bucket.raw.arn}/*"]
   }
   statement {
-    sid     = "WriteDDB"
-    actions = ["dynamodb:PutItem"]
+    sid       = "WriteDDB"
+    actions   = ["dynamodb:PutItem"]
     resources = [aws_dynamodb_table.events.arn]
   }
   statement {
-    sid     = "Logs"
-    actions = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+    sid       = "Logs"
+    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:*:*:*"]
   }
 }
@@ -130,7 +118,7 @@ resource "aws_lambda_function" "ingest" {
   role          = aws_iam_role.ingest_role.arn
   runtime       = "python3.12"
   handler       = "ingest.handler"
-  filename      = data.archive_file.ingest_zip.output_path
+  filename      = "${path.module}/lambda_ingest.zip"
   timeout       = 10
 
   environment {

@@ -12,12 +12,17 @@ phases:
       - unzip t.zip && mv terraform /usr/local/bin/ && rm -f t.zip
   pre_build:
     commands:
-      - terraform -version
-      - terraform -chdir=infra/envs/dev init -input=false
+      - cd infra/envs/dev
+      # build the same lambda zip that apply will use
+      - mkdir -p lambda
+      - test -f lambda/ingest.py
+      - rm -f lambda_ingest.zip
+      - zip -j lambda_ingest.zip lambda/ingest.py
+      - terraform init -input=false
   build:
     commands:
-      - terraform -chdir=infra/envs/dev validate
-      - terraform -chdir=infra/envs/dev plan -input=false -out=tfplan
+      - terraform validate
+      - terraform plan -input=false -out=tfplan
 artifacts:
   files:
     - infra/envs/dev/tfplan
