@@ -16,5 +16,7 @@ phases:
       - terraform -chdir=infra/envs/dev init -input=false
   build:
     commands:
-      - cp "$CODEBUILD_SRC_DIR_PLAN_OUTPUT/infra/envs/dev/tfplan" "$CODEBUILD_SRC_DIR/infra/envs/dev/tfplan"
+      - echo "Copy tfplan from plan_output artifact..."
+      - cp "$CODEBUILD_SRC_DIR_plan_output/infra/envs/dev/tfplan" "$CODEBUILD_SRC_DIR/infra/envs/dev/tfplan"
+      - echo "Apply (dev)..."
       - terraform -chdir=infra/envs/dev apply -input=false -auto-approve tfplan
