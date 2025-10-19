@@ -1,0 +1,16 @@
+version: 0.2
+env:
+  variables:
+    TF_IN_AUTOMATION: "1"
+phases:
+  install:
+    commands:
+      - curl -fsSL https://releases.hashicorp.com/terraform/1.13.4/terraform_1.13.4_linux_amd64.zip -o t.zip
+      - unzip t.zip && mv terraform /usr/local/bin/ && rm -f t.zip
+  pre_build:
+    commands:
+      - cd infra/envs/dev
+      - terraform init -input=false
+  build:
+    commands:
+      - terraform apply -input=false -auto-approve tfplan
