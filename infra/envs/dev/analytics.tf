@@ -1,7 +1,7 @@
 # infra/envs/dev/analytics.tf
 
-# Reuse existing locals (project_name/env/region/raw_bucket) defined elsewhere.
-# Only define a *new* local for the analytics bucket name.
+# Reuse existing locals (project_name/env/region/raw_bucket) from other files.
+# Only define a new one for the analytics bucket name.
 locals {
   analytics_bucket = "${local.project_name}-analytics-${local.env}"
 }
@@ -71,14 +71,35 @@ resource "aws_glue_catalog_table" "events_raw" {
       serialization_library = "org.openx.data.jsonserde.JsonSerDe"
     }
 
-    columns { name = "id"      type = "string" }
-    columns { name = "user_id" type = "string" }
-    columns { name = "ts"      type = "string" }
-    columns { name = "type"    type = "string" }
-    columns { name = "text"    type = "string" }
-    columns { name = "source"  type = "string" }
-    # keep nested parsed as string for flexibility; we can evolve schema later
-    columns { name = "parsed"  type = "string" }
+    columns {
+      name = "id"
+      type = "string"
+    }
+    columns {
+      name = "user_id"
+      type = "string"
+    }
+    columns {
+      name = "ts"
+      type = "string"
+    }
+    columns {
+      name = "type"
+      type = "string"
+    }
+    columns {
+      name = "text"
+      type = "string"
+    }
+    columns {
+      name = "source"
+      type = "string"
+    }
+    # keep nested 'parsed' as string for flexibility (we'll use json_extract in Athena)
+    columns {
+      name = "parsed"
+      type = "string"
+    }
   }
 }
 
