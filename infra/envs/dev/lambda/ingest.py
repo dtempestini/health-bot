@@ -88,6 +88,17 @@ def lambda_handler(event, context):
     if is_meal:
         table = dynamodb.Table(EVENTS_TABLE)
         table.put_item(Item=item)
+
+        # 🔔 Publish event to SNS so the meal_enricher Lambda is triggered
+        sns_arn = os.environ.get("MEAL_EVENTS_ARN")
+        if sns_arn:
+            sns = boto3.client("sns")
+            sns.publish(
+                TopicArn=sns_arn,
+                Message=json.dumps(item),
+                Subject="NewMealLogged"
+            )
+
         return _twiml(f"✔ Logged meal: {clean}")
 
     # Fallback
