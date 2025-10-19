@@ -9,10 +9,12 @@ phases:
       - unzip t.zip && mv terraform /usr/local/bin/ && rm -f t.zip
   pre_build:
     commands:
-      - cd infra/envs/dev
-      - terraform init -input=false
+      - terraform -version
+      - echo "Init (dev)..."
+      - terraform -chdir=infra/envs/dev init -input=false
   build:
     commands:
-      # Copy tfplan from the secondary artifact into the working directory
-      - cp "$CODEBUILD_SRC_DIR_PLAN_OUTPUT/infra/envs/dev/tfplan" infra/envs/dev/tfplan
-      - terraform apply -input=false -auto-approve tfplan
+      - echo "Copy tfplan from plan_output artifact..."
+      - cp "$CODEBUILD_SRC_DIR_PLAN_OUTPUT/infra/envs/dev/tfplan" "$CODEBUILD_SRC_DIR/infra/envs/dev/tfplan"
+      - echo "Apply (dev)..."
+      - terraform -chdir=infra/envs/dev apply -input=false -auto-approve tfplan
