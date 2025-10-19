@@ -1,9 +1,9 @@
 terraform {
   backend "s3" {
-    bucket         = "health-bot-tfstate"      # <-- your bootstrap bucket
+    bucket         = "health-bot-tfstate" # <-- your bootstrap bucket
     key            = "infra/dev/terraform.tfstate"
     region         = "us-east-1"
-    dynamodb_table = "health-bot-tf-locks"     # <-- your bootstrap lock table
+    dynamodb_table = "health-bot-tf-locks" # <-- your bootstrap lock table
     encrypt        = true
   }
   required_providers {
