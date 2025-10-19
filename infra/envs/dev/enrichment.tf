@@ -110,7 +110,6 @@ resource "aws_sns_topic_subscription" "email_me" {
 # that you will fill in the console.
 data "aws_secretsmanager_secret" "nutrition_api_key" {
   name        = local.nutrition_secret_name
-  description = "Nutritionix App ID/Key (JSON: {\"app_id\":\"...\",\"app_key\":\"...\"})"
 }
 
 # ------------- IAM for meal_enricher -------------
