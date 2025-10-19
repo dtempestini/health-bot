@@ -13,4 +13,6 @@ phases:
       - terraform init -input=false
   build:
     commands:
+      # Copy tfplan from the secondary artifact into the working directory
+      - cp "$CODEBUILD_SRC_DIR_PLAN_OUTPUT/infra/envs/dev/tfplan" infra/envs/dev/tfplan
       - terraform apply -input=false -auto-approve tfplan
