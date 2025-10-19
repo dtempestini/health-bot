@@ -70,10 +70,8 @@ resource "aws_dynamodb_table" "events" {
     Env     = local.env
   }
 
-  stream_specification {
-    stream_enabled   = true
-    stream_view_type = "NEW_IMAGE"
-  }
+  stream_enabled   = true
+  stream_view_type = "NEW_IMAGE"
 }
 
 # --- LAMBDA ROLE + POLICY ---
