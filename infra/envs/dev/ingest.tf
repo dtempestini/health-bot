@@ -106,6 +106,11 @@ data "aws_iam_policy_document" "ingest_policy" {
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:*:*:*"]
   }
+  statement {
+    sid     = "ReadNutritionSecretForIngest"
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [data.aws_secretsmanager_secret.nutrition_api_key.arn] # or aws_secretsmanager_secret.nutrition_api_key.arn if TF owns it
+    }
 }
 
 resource "aws_iam_policy" "ingest_inline" {
@@ -132,6 +137,7 @@ resource "aws_lambda_function" "ingest" {
       RAW_BUCKET   = aws_s3_bucket.raw.bucket
       EVENTS_TABLE = aws_dynamodb_table.events.name
       USER_ID      = "me"
+      NUTRITION_SECRET_NAME = data.aws_secretsmanager_secret.nutrition_api_key.name
     }
   }
 }
