@@ -35,13 +35,28 @@ resource "aws_dynamodb_table" "events" {
   name         = local.events_table
   billing_mode = "PAY_PER_REQUEST"
 
-  hash_key  = "pk" # user id or "me"
-  range_key = "sk" # ISO8601 timestamp
+  hash_key  = "pk"   # user id or "me"
+  range_key = "sk"   # ISO8601 timestamp
 
-  attribute { name = "pk"  type = "S" }
-  attribute { name = "sk"  type = "S" }
-  attribute { name = "dt"  type = "S" }
-  attribute { name = "type" type = "S" }
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  attribute {
+    name = "dt"
+    type = "S"
+  }
+
+  attribute {
+    name = "type"
+    type = "S"
+  }
 
   global_secondary_index {
     name            = "gsi_dt"
@@ -52,6 +67,7 @@ resource "aws_dynamodb_table" "events" {
 
   tags = { Project = local.project_name, Env = local.env }
 }
+
 
 # --- PACKAGE LAMBDA CODE ---
 data "archive_file" "ingest_zip" {
