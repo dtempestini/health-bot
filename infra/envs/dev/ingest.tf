@@ -65,13 +65,15 @@ resource "aws_dynamodb_table" "events" {
     projection_type = "ALL"
   }
 
-  tags = { Project = local.project_name, Env = local.env }
+  tags = {
+    Project = local.project_name
+    Env     = local.env
+  }
 
   stream_specification {
     stream_enabled   = true
     stream_view_type = "NEW_IMAGE"
   }
-
 }
 
 # --- LAMBDA ROLE + POLICY ---
