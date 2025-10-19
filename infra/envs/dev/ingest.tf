@@ -70,8 +70,6 @@ resource "aws_dynamodb_table" "events" {
     Env     = local.env
   }
 
-  stream_enabled   = true
-  stream_view_type = "NEW_IMAGE"
 }
 
 # --- LAMBDA ROLE + POLICY ---
@@ -129,18 +127,46 @@ resource "aws_lambda_function" "ingest" {
   role          = aws_iam_role.ingest_role.arn
   runtime       = "python3.12"
   handler       = "ingest.handler"
-  filename      = "${path.module}/lambda_ingest.zip"
+  filename         = "${path.module}/lambda_ingest.zip"
+  source_code_hash = filebase64sha256("${path.module}/lambda_ingest.zip")
   timeout       = 10
 
   environment {
     variables = {
-      RAW_BUCKET   = aws_s3_bucket.raw.bucket
-      EVENTS_TABLE = aws_dynamodb_table.events.name
-      USER_ID      = "me"
-      NUTRITION_SECRET_NAME = data.aws_secretsmanager_secret.nutrition_api_key.name
+    RAW_BUCKET   = aws_s3_bucket.raw.bucket
+    EVENTS_TABLE = aws_dynamodb_table.events.name
+    USER_ID      = "me"
+    NUTRITION_SECRET_NAME = data.aws_secretsmanager_secret.nutrition_api_key.name
+    MEAL_EVENTS_ARN = aws_sns_topic.meal_events.arn
     }
   }
 }
+
+# ===========================================================
+#  Meal Enricher Lambda – placeholder for Nutritionix logic
+# ===========================================================
+
+resource "aws_lambda_function" "meal_enricher" {
+  function_name    = "hb_meal_enricher_dev"
+  runtime          = "python3.11"
+  handler          = "meal_enricher.lambda_handler"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = "${path.module}/lambda_meal_enricher.zip"
+  source_code_hash = filebase64sha256("${path.module}/lambda_meal_enricher.zip")
+  timeout          = 30
+
+  environment {
+    variables = {
+      ENVIRONMENT = "dev"
+    }
+  }
+}
+
+# Optional SNS or Dynamo triggers can be added later
+output "meal_enricher_arn" {
+  value = aws_lambda_function.meal_enricher.arn
+}
+
 
 # --- API GATEWAY (HTTP API) + ROUTE ---
 resource "aws_apigatewayv2_api" "api" {

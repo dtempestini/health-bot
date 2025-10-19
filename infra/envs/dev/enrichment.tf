@@ -195,6 +195,7 @@ resource "aws_lambda_function" "meal_enricher" {
   runtime       = "python3.12"
   handler       = "meal_enricher.handler"
   filename      = "${path.module}/lambda_meal_enricher.zip"
+  source_code_hash = filebase64sha256("${path.module}/lambda_meal_enricher.zip")
   timeout       = 20
 
   environment {
@@ -209,16 +210,35 @@ resource "aws_lambda_function" "meal_enricher" {
   }
 }
 
-# ------------- Events stream -> Lambda mapping -------------
-resource "aws_lambda_event_source_mapping" "events_stream" {
-  event_source_arn  = aws_dynamodb_table.events.stream_arn
-  function_name     = aws_lambda_function.meal_enricher.arn
-  starting_position = "LATEST"
-  batch_size        = 100
-  maximum_batching_window_in_seconds = 1
-}
-
 # NOTE: Avoid name collision with any existing output named 'sns_topic_arn'
 output "sns_notifications_topic_arn" {
   value = aws_sns_topic.notifications.arn
+}
+
+# ===========================================================
+# SNS Topic for meal events
+# ===========================================================
+
+resource "aws_sns_topic" "meal_events" {
+  name = "hb_meal_events_dev"
+}
+
+# Allow SNS to invoke the enricher Lambda
+resource "aws_lambda_permission" "allow_sns_to_invoke_enricher" {
+  statement_id  = "AllowInvokeFromSNS"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.meal_enricher.function_name
+  principal     = "sns.amazonaws.com"
+  source_arn    = aws_sns_topic.meal_events.arn
+}
+
+# Subscribe the enricher Lambda to the SNS topic
+resource "aws_sns_topic_subscription" "meal_enricher_sub" {
+  topic_arn = aws_sns_topic.meal_events.arn
+  protocol  = "lambda"
+  endpoint  = aws_lambda_function.meal_enricher.arn
+}
+
+output "meal_events_topic_arn" {
+  value = aws_sns_topic.meal_events.arn
 }
