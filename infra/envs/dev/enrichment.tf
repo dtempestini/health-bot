@@ -108,7 +108,7 @@ resource "aws_sns_topic_subscription" "email_me" {
 # If you already created this secret by hand with the same name, keep this resource
 # and later import it; or comment it out. Otherwise Terraform will create an empty secret
 # that you will fill in the console.
-resource "aws_secretsmanager_secret" "nutrition_api_key" {
+data "aws_secretsmanager_secret" "nutrition_api_key" {
   name        = local.nutrition_secret_name
   description = "Nutritionix App ID/Key (JSON: {\"app_id\":\"...\",\"app_key\":\"...\"})"
 }
@@ -169,7 +169,7 @@ data "aws_iam_policy_document" "meal_policy" {
   statement {
     sid     = "ReadSecret"
     actions = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.nutrition_api_key.arn]
+    resources = [data.aws_secretsmanager_secret.nutrition_api_key.arn]
   }
 
   statement {
@@ -205,7 +205,7 @@ resource "aws_lambda_function" "meal_enricher" {
       TOTALS_TABLE          = aws_dynamodb_table.totals.name
       CURATED_BUCKET        = aws_s3_bucket.curated.bucket
       NOTIFY_TOPIC          = aws_sns_topic.notifications.arn
-      NUTRITION_SECRET_NAME = aws_secretsmanager_secret.nutrition_api_key.name
+      NUTRITION_SECRET_NAME = data.aws_secretsmanager_secret.nutrition_api_key.name
     }
   }
 }
