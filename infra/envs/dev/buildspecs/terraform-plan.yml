@@ -18,6 +18,8 @@ phases:
       - test -f lambda/ingest.py
       - rm -f lambda_ingest.zip
       - zip -j lambda_ingest.zip lambda/ingest.py
+      - rm -f lambda_meal_enricher.zip
+      - zip -j lambda_meal_enricher.zip lambda/meal_enricher.py
       - terraform init -input=false
   build:
     commands:
