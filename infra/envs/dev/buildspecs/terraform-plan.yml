@@ -14,7 +14,10 @@ phases:
   build:
     commands:
       - terraform validate
-      - terraform plan -input=false -out=tfplan -var="billing_email=david.tempestini@gmail.com"
+      - terraform plan -input=false -out=tfplan \
+          -var="billing_email=david.tempestini@gmail.com" \
+          -var="codestar_connection_arn=arn:aws:codeconnections:us-east-1:684441749407:connection/f2fc225f-b9aa-429b-ab41-50de95dc71d9" \
+          -var="github_repo=dtempestini/health-bot"
 artifacts:
   files:
     - infra/envs/dev/tfplan
