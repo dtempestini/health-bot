@@ -1,5 +1,5 @@
 # file: infra/envs/dev/lambda/ingest.py
-import os, json, urllib.parse, boto3, time
+import os, json, urllib.parse, boto3, time, base64
 
 sns = boto3.client('sns')
 ddb = boto3.resource('dynamodb')
@@ -17,12 +17,17 @@ def _parse_body(event):
     body = event.get("body") or ""
     is_base64 = event.get("isBase64Encoded")
     if is_base64:
-        body = urllib.parse.unquote_plus(body)
+        try:
+            body = base64.b64decode(body).decode("utf-8", "ignore")
+        except Exception:
+            pass
     if "application/x-www-form-urlencoded" in ct:
         data = urllib.parse.parse_qs(body)
         text = (data.get("Body") or [""])[0].strip()
         sender = (data.get("From") or [""])[0].strip()
-        return text, sender, "sms"
+        to = (data.get("To") or [""])[0].strip()
+        transport = "whatsapp" if sender.startswith("whatsapp:") or to.startswith("whatsapp:") else "sms"
+        return text, sender, transport
     # JSON fallback
     try:
         j = json.loads(body or "{}")
