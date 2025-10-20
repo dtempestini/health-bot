@@ -1,105 +1,85 @@
-import os, json, time, datetime, urllib.parse, boto3
+import os, json, time, uuid, urllib.parse, boto3
 
-dynamodb = boto3.resource("dynamodb")
+dynamodb_res = boto3.resource("dynamodb")
+dynamodb_cli = boto3.client("dynamodb")
+sns = boto3.client("sns")
+
 EVENTS_TABLE = os.environ.get("EVENTS_TABLE", "hb_events_dev")
+MEAL_EVENTS_ARN = os.environ.get("MEAL_EVENTS_ARN")  # may be None
 
-def _now():
-    t = datetime.datetime.utcnow()
-    return t.strftime("%Y-%m-%d"), int(t.timestamp())
+# Cache table key schema so we always use the correct key names
+_key_schema_cache = None
+def _get_key_names():
+    global _key_schema_cache
+    if _key_schema_cache:
+        return _key_schema_cache
+    desc = dynamodb_cli.describe_table(TableName=EVENTS_TABLE)
+    keys = {e["KeyType"]: e["AttributeName"] for e in desc["Table"]["KeySchema"]}
+    # HASH must exist; RANGE may or may not
+    pk_name = keys["HASH"]
+    sk_name = keys.get("RANGE")  # could be None
+    _key_schema_cache = (pk_name, sk_name)
+    print(f"Key names detected: pk={pk_name}, sk={sk_name}")
+    return _key_schema_cache
 
-def _twiml(msg: str):
-    # Twilio expects XML (TwiML)
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/xml"},
-        "body": f"<Response><Message>{msg}</Message></Response>",
-    }
+def _now_parts():
+    ts = int(time.time() * 1000)
+    dt = time.strftime("%Y-%m-%d", time.gmtime(ts/1000))
+    return ts, dt
 
-def _json_ok(payload):
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(payload),
-    }
+def _parse_body(event):
+    # Direct test: event already a dict with "text"
+    if isinstance(event, dict) and "text" in event:
+        return {"text": event["text"]}
 
-def _parse_incoming(event):
-    """
-    Supports:
-      - Twilio webhook: content-type 'application/x-www-form-urlencoded'
-        -> fields: Body, From
-      - Your curl/JSON tests: {"text": "...", "from": "..."}
-    Returns: (text, sender)
-    """
-    body = event.get("body") or ""
-    ctype = (event.get("headers", {}).get("content-type")
-             or event.get("headers", {}).get("Content-Type", ""))
+    body = event.get("body")
+    if body is None:
+        return {}
 
-    # Twilio (form-encoded)
-    if "application/x-www-form-urlencoded" in ctype:
-        form = urllib.parse.parse_qs(body)
-        text = (form.get("Body", [""])[0] or "").strip()
-        sender = (form.get("From", [""])[0] or "").strip()
-        return text, sender
-
-    # JSON
     try:
-        data = json.loads(body) if isinstance(body, str) else body
+        return json.loads(body)  # JSON body
     except Exception:
-        data = {}
-    return (data.get("text", "") or "").strip(), (data.get("from", "") or "").strip()
+        pass
+
+    form = urllib.parse.parse_qs(body or "")
+    text = (form.get("Body") or form.get("text") or [""])[0]
+    return {"text": text}
 
 def lambda_handler(event, context):
-    text, sender = _parse_incoming(event)
-    print(f"Incoming -> sender={sender!r} text={text!r}")
+    print("Incoming ->", "sender=", event.get("from") or "", " text=", _parse_body(event).get("text"))
+    table = dynamodb_res.Table(EVENTS_TABLE)
+    pk_name, sk_name = _get_key_names()
 
-    if not text:
-        # If this came from Twilio, answer in TwiML; otherwise JSON
-        is_twilio = "application/x-www-form-urlencoded" in (
-            event.get("headers", {}).get("content-type", "").lower()
-            + event.get("headers", {}).get("Content-Type", "").lower()
-        )
-        msg = "Empty message. Send 'meal: ...' or 'dev: ...'."
-        return _twiml(msg) if is_twilio else _json_ok({"ok": False, "msg": msg})
+    payload = _parse_body(event)
+    raw = (payload.get("text") or "").strip()
+    if not raw:
+        return {"statusCode": 200, "body": json.dumps({"ok": True, "msg": "empty"})}
 
-    # Mode routing
-    lower = text.lower().lstrip()
-    is_dev = lower.startswith("dev:")
-    is_meal = lower.startswith("meal:")
+    ts, dt = _now_parts()
+    is_meal = raw.lower().startswith("meal:")
+    pk_value = f"meal#{uuid.uuid4()}" if is_meal else f"event#{uuid.uuid4()}"
 
-    # Strip mode prefix
-    clean = text.split(":", 1)[1].strip() if (is_dev or is_meal) else text
-
-    # Build base event
-    dt, ts = _now()
+    # Build the item using whatever key names the table actually has
     item = {
-        "pk": sender or "self",
-        "dt": dt,                 # for GSI dt queries
-        "ts": ts,                 # sort/ordering
-        "type": "meal" if is_meal else "text",
-        "text": clean,
-        "raw": text,
+        pk_name: pk_value,
+        "dt": dt,
+        "type": "meal" if is_meal else "event",
+        "text": raw,
+        "source": "sms",
     }
+    if sk_name:
+        # Use millisecond epoch for sort key; works if type is N or S
+        item[sk_name] = ts
 
-    # DEV mode: do NOT persist, echo back
-    if is_dev:
-        return _twiml(f"[DEV] {clean} — received. Not logged.")
+    # Write to DynamoDB
+    table.put_item(Item=item)
 
-    # MEAL mode: persist
-    if is_meal:
-        table = dynamodb.Table(EVENTS_TABLE)
-        table.put_item(Item=item)
+    # Publish to SNS for meals
+    if is_meal and MEAL_EVENTS_ARN:
+        try:
+            sns.publish(TopicArn=MEAL_EVENTS_ARN, Message=json.dumps(item), Subject="NewMealLogged")
+            print("Published to SNS", MEAL_EVENTS_ARN)
+        except Exception as e:
+            print("SNS publish error:", repr(e))
 
-        # 🔔 Publish event to SNS so the meal_enricher Lambda is triggered
-        sns_arn = os.environ.get("MEAL_EVENTS_ARN")
-        if sns_arn:
-            sns = boto3.client("sns")
-            sns.publish(
-                TopicArn=sns_arn,
-                Message=json.dumps(item),
-                Subject="NewMealLogged"
-            )
-
-        return _twiml(f"✔ Logged meal: {clean}")
-
-    # Fallback
-    return _twiml("Send 'meal: ...' to log, or 'dev: ...' to test.")
+    return {"statusCode": 200, "body": json.dumps({"ok": True, "id": pk_value, "dt": dt})}
