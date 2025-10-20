@@ -90,7 +90,7 @@ def lambda_handler(event, context):
 
             # Update DynamoDB record with nutrition info
             table.update_item(
-                Key={"pk": message["pk"], "ts": message["ts"]},
+                Key={"pk": message["pk"], "sk": message["sk"]},
                 UpdateExpression="SET nutrition = :n",
                 ExpressionAttributeValues={
                     ":n": {
