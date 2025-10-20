@@ -8,6 +8,8 @@
 terraform.tfvars
 tfplan
 .terraform.lock.hcl
+!lambda/requests-layer.zip
+
 
 # Python (future)
 __pycache__/
