@@ -129,16 +129,6 @@ resource "aws_iam_role" "meal_role" {
 }
 
 data "aws_iam_policy_document" "meal_policy" {
-  statement {
-    sid     = "ReadEventsStream"
-    actions = [
-      "dynamodb:DescribeStream",
-      "dynamodb:GetRecords",
-      "dynamodb:GetShardIterator",
-      "dynamodb:ListStreams"
-    ]
-    resources = [aws_dynamodb_table.events.stream_arn]
-  }
 
   statement {
     sid     = "WriteMealsAndTotals"
@@ -149,7 +139,8 @@ data "aws_iam_policy_document" "meal_policy" {
     ]
     resources = [
       aws_dynamodb_table.meals.arn,
-      aws_dynamodb_table.totals.arn
+      aws_dynamodb_table.totals.arn,
+      aws_dynamodb_table.events.arn
     ]
   }
 
