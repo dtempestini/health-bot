@@ -168,6 +168,13 @@ data "aws_iam_policy_document" "meal_policy" {
   }
 
   statement {
+  sid     = "ReadTwilioSecret"
+  actions = ["secretsmanager:GetSecretValue"]
+  resources = [data.aws_secretsmanager_secret.twilio.arn]
+}
+
+
+  statement {
     sid     = "Logs"
     actions = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:*:*:*"]
@@ -184,6 +191,13 @@ resource "aws_iam_role_policy_attachment" "meal_attach" {
   policy_arn = aws_iam_policy.meal_inline.arn
 }
 
+# ---------- Lambda Layer for Python requests ----------
+resource "aws_lambda_layer_version" "requests" {
+  filename   = "${path.module}/lambda/requests-layer.zip"
+  layer_name = "requests"
+  compatible_runtimes = ["python3.12"]
+}
+
 # ------------- Lambda: meal_enricher -------------
 resource "aws_lambda_function" "meal_enricher" {
   function_name = local.meal_enricher_name
@@ -193,6 +207,8 @@ handler        = "meal_enricher.lambda_handler"
 filename       = "${path.module}/lambda_meal_enricher.zip"
   source_code_hash = filebase64sha256("${path.module}/lambda_meal_enricher.zip")
   timeout       = 20
+
+    layers = [aws_lambda_layer_version.requests.arn]
 
   environment {
     variables = {
