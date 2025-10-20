@@ -112,6 +112,11 @@ data "aws_secretsmanager_secret" "nutrition_api_key" {
   name        = local.nutrition_secret_name
 }
 
+data "aws_secretsmanager_secret" "twilio" {
+  name = "hb_twilio_${local.env}"
+}
+
+
 # ------------- IAM for meal_enricher -------------
 data "aws_iam_policy_document" "meal_lambda_assume" {
   statement {
@@ -198,6 +203,7 @@ filename       = "${path.module}/lambda_meal_enricher.zip"
       NOTIFY_TOPIC          = aws_sns_topic.notifications.arn
       NUTRITION_SECRET_NAME = data.aws_secretsmanager_secret.nutrition_api_key.name
       EVENTS_TABLE           = aws_dynamodb_table.events.name
+      TWILIO_SECRET_NAME    = data.aws_secretsmanager_secret.twilio.name
     }
   }
 }

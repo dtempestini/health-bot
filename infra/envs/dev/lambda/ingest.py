@@ -1,132 +1,84 @@
-# ingest.py
-import os, json, time, uuid, urllib.parse
-import boto3
-from decimal import Decimal
+# file: infra/envs/dev/lambda/ingest.py
+import os, json, urllib.parse, boto3, time
 
+sns = boto3.client('sns')
+ddb = boto3.resource('dynamodb')
+TABLE = os.environ["EVENTS_TABLE"]
+RAW_BUCKET = os.environ["RAW_BUCKET"]   # not used here but kept for future
+USER_ID = os.environ.get("USER_ID", "me")
+MEAL_EVENTS_ARN = os.environ["MEAL_EVENTS_ARN"]
 
-# ---- AWS clients/resources ----
-dynamodb_res = boto3.resource("dynamodb")
-dynamodb_cli = boto3.client("dynamodb")
-sns = boto3.client("sns")
-
-# ---- Environment ----
-EVENTS_TABLE        = os.environ.get("EVENTS_TABLE", "hb_events_dev")
-MEAL_EVENTS_ARN     = os.environ.get("MEAL_EVENTS_ARN")  # SNS topic for meals
-USER_ID             = os.environ.get("USER_ID", "me")
-
-PK_ENV = os.environ.get("PK_NAME")
-SK_ENV = os.environ.get("SK_NAME")
-
-def _get_key_schema():
-    """
-    Always use env-provided names when given; otherwise default to pk/sk.
-    We assume 'S' (string) types for both keys to match your table.
-    This avoids DescribeTable and any IAM dependency.
-    """
-    pk = PK_ENV or "pk"
-    sk = SK_ENV or "sk"  # if your table had no sort key, set this to None
-    return (pk, "S", sk, "S")
-
-def to_decimal(x):
-    if isinstance(x, float):
-        # str() preserves value textually so Decimal is exact enough for DDB
-        return Decimal(str(x))
-    if isinstance(x, dict):
-        return {k: to_decimal(v) for k, v in x.items()}
-    if isinstance(x, list):
-        return [to_decimal(v) for v in x]
-    return x
-
-def _now_parts():
-    ts_ms = int(time.time() * 1000)
-    dt = time.strftime("%Y-%m-%d", time.gmtime(ts_ms / 1000))
-    return ts_ms, dt
-
+def _now_ms():
+    return int(time.time() * 1000)
 
 def _parse_body(event):
-    """
-    Accepts:
-      - { "text": "..." } JSON
-      - raw API GW v2 event with JSON body
-      - Twilio/x-www-form-urlencoded (Body=...&From=...)
-    Returns: dict with at least {"text": "..."} (or empty text)
-    """
-    # direct invocation form
-    if isinstance(event, dict) and "text" in event:
-        return {"text": event["text"]}
-
-    body = event.get("body")
-    if body is None:
-        return {"text": ""}
-
-    # try JSON
+    # Support Twilio (x-www-form-urlencoded) and JSON test posts
+    ct = (event.get("headers") or {}).get("content-type") or (event.get("headers") or {}).get("Content-Type") or ""
+    body = event.get("body") or ""
+    is_base64 = event.get("isBase64Encoded")
+    if is_base64:
+        body = urllib.parse.unquote_plus(body)
+    if "application/x-www-form-urlencoded" in ct:
+        data = urllib.parse.parse_qs(body)
+        text = (data.get("Body") or [""])[0].strip()
+        sender = (data.get("From") or [""])[0].strip()
+        return text, sender, "sms"
+    # JSON fallback
     try:
-        j = json.loads(body)
-        if isinstance(j, dict) and "text" in j:
-            return {"text": j["text"]}
+        j = json.loads(body or "{}")
+        return j.get("text","").strip(), j.get("sender","").strip(), j.get("source","cli")
     except Exception:
-        pass
+        return "", "", "unknown"
 
-    # try form
-    form = urllib.parse.parse_qs(body or "")
-    text = (form.get("Body") or form.get("text") or [""])[0]
-    return {"text": text}
-
+def _twiml(message):
+    # Minimal TwiML reply
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>{message}</Message>
+</Response>"""
 
 def lambda_handler(event, context):
-    payload = _parse_body(event)
-    raw = (payload.get("text") or "").strip()
+    text, sender, source = _parse_body(event)
+    ts = _now_ms()
+    dt = time.strftime("%Y-%m-%d", time.gmtime(ts/1000))
 
-    print("Incoming -> sender=",
-          (payload.get("from") or event.get("from") or ""),
-          " text=", raw)
-
-    # Gracefully handle empty input
-    if not raw:
-        return {"statusCode": 200,
-                "body": json.dumps({"ok": True, "msg": "empty"})}
-
-    # Determine type
-    is_meal = raw.lower().startswith("meal:")
-    evt_type = "meal" if is_meal else "event"
-
-    # Keys & timestamps
-    ts, dt = _now_parts()
-    pk_name, pk_type, sk_name, sk_type = _get_key_schema()
-
-    # Generate a stable-ish pk; you can change this later to your liking
-    pk_val = f"{evt_type}#{uuid.uuid4()}"
-
-    # Build item, coercing key types correctly
+    # Write “raw meal” event
+    table = ddb.Table(TABLE)
+    pk = f"meal#{context.aws_request_id}"
     item = {
-        pk_name: str(pk_val) if pk_type == "S" else pk_val,
-        "dt": dt,
-        "type": evt_type,
-        "text": raw,
-        "source": "sms",
+        "pk": pk,
+        "sk": str(ts),
+        "type": "meal",
+        "text": text,
+        "source": source,
         "uid": USER_ID,
+        "dt": dt,
     }
-    if sk_name:
-        # Your table defines sk as String; coerce if needed
-        item[sk_name] = str(ts) if (sk_type or "S") == "S" else ts
+    if sender:
+        item["sender"] = sender
 
-    # Write to DynamoDB
-    table = dynamodb_res.Table(EVENTS_TABLE)
-    table.put_item(Item=to_decimal(item))
+    table.put_item(Item=item)
 
-    # Fan-out meals to SNS (meal enricher)
-    if is_meal and MEAL_EVENTS_ARN:
-        try:
-            sns.publish(
-                TopicArn=MEAL_EVENTS_ARN,
-                Message=json.dumps(item),
-                Subject="NewMealLogged"
-            )
-            print("Published to SNS", MEAL_EVENTS_ARN)
-        except Exception as e:
-            print("SNS publish error:", repr(e))
+    # Fan-out to enricher
+    sns.publish(
+        TopicArn=MEAL_EVENTS_ARN,
+        Message=json.dumps(item),
+        Subject="meal_event"
+    )
 
+    # If this was Twilio, reply immediately with TwiML
+    headers = {k.lower(): v for k,v in (event.get("headers") or {}).items()}
+    ct = headers.get("content-type","")
+    if "application/x-www-form-urlencoded" in ct:
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/xml"},
+            "body": _twiml("Got it! Logging your meal and calculating macros…")
+        }
+
+    # JSON response for curl/tests
     return {
         "statusCode": 200,
-        "body": json.dumps({"ok": True, "id": item[pk_name], "dt": dt})
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps({"ok": True, "id": pk, "dt": dt})
     }
