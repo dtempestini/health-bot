@@ -23,8 +23,9 @@ phases:
       - ENV_DIR="$ROOT/infra/envs/dev"
       - LAYER_DIR="$ROOT/lambda/requests-layer"
       - PLAN_DIR="${CODEBUILD_SRC_DIR_TFPLAN_OUTPUT}"
+      
       - echo "Plan dir is: $PLAN_DIR"
-      - test -f "$PLAN_DIR/infra/envs/dev/tfplan" || { echo "ERROR: plan file not found in artifact"; ls -R "$PLAN_DIR"; exit 1; }
+      - "test -f \"$PLAN_DIR/infra/envs/dev/tfplan\" || { echo \"ERROR: plan file not found in artifact\"; ls -R \"$PLAN_DIR\"; exit 1; }"
 
       - yum -y install zip || true
       - python3 -m pip install --upgrade pip
