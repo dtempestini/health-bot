@@ -12,39 +12,19 @@ EVENTS_TABLE        = os.environ.get("EVENTS_TABLE", "hb_events_dev")
 MEAL_EVENTS_ARN     = os.environ.get("MEAL_EVENTS_ARN")  # SNS topic for meals
 USER_ID             = os.environ.get("USER_ID", "me")
 
-# If these are present we will NOT call DescribeTable (no IAM needed)
-PK_ENV = os.environ.get("PK_NAME")  # e.g., "pk"
-SK_ENV = os.environ.get("SK_NAME")  # e.g., "sk" (optional)
-
-_schema_cache = None
-
+PK_ENV = os.environ.get("PK_NAME")
+SK_ENV = os.environ.get("SK_NAME")
 
 def _get_key_schema():
     """
-    Returns: (pk_name, pk_type, sk_name_or_None, sk_type_or_None)
-    Types are one of 'S', 'N', 'B'. We assume 'S' for env-provided keys.
+    Always use env-provided names when given; otherwise default to pk/sk.
+    We assume 'S' (string) types for both keys to match your table.
+    This avoids DescribeTable and any IAM dependency.
     """
-    global _schema_cache
-    if _schema_cache:
-        return _schema_cache
+    pk = PK_ENV or "pk"
+    sk = SK_ENV or "sk"  # if your table had no sort key, set this to None
+    return (pk, "S", sk, "S")
 
-    if PK_ENV:
-        # Use env-provided key names; assume string types (fits your table)
-        print(f"Using PK/SK from env: {PK_ENV}/{SK_ENV}")
-        _schema_cache = (PK_ENV, "S", SK_ENV, "S" if SK_ENV else None)
-        return _schema_cache
-
-    # Fallback: discover from DynamoDB (requires DescribeTable permission)
-    desc = dynamodb_cli.describe_table(TableName=EVENTS_TABLE)
-    type_map = {a["AttributeName"]: a["AttributeType"]
-                for a in desc["Table"]["AttributeDefinitions"]}
-    ks = {e["KeyType"]: e["AttributeName"]
-          for e in desc["Table"]["KeySchema"]}
-    pk_name = ks["HASH"]; pk_type = type_map[pk_name]
-    sk_name = ks.get("RANGE"); sk_type = type_map.get(sk_name) if sk_name else None
-    _schema_cache = (pk_name, pk_type, sk_name, sk_type)
-    print(f"Key schema: pk=({pk_name},{pk_type}) sk=({sk_name},{sk_type})")
-    return _schema_cache
 
 
 def _now_parts():

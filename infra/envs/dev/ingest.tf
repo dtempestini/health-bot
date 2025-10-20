@@ -95,9 +95,20 @@ data "aws_iam_policy_document" "ingest_policy" {
     resources = ["${aws_s3_bucket.raw.arn}/*"]
   }
   statement {
-    sid       = "WriteDDB"
-    actions   = ["dynamodb:PutItem"]
-    resources = [aws_dynamodb_table.events.arn]
+    sid     = "DDBWriteAndDescribe"
+    actions = [
+        "dynamodb:PutItem",
+        "dynamodb:DescribeTable",
+    ]
+    resources = [
+      aws_dynamodb_table.events.arn
+    ]
+  }
+
+  statement {
+    sid     = "SNSPublishMeals"
+    actions = ["sns:Publish"]
+    resources = [aws_sns_topic.meal_events.arn]
   }
   statement {
     sid       = "Logs"
@@ -138,6 +149,8 @@ resource "aws_lambda_function" "ingest" {
     USER_ID      = "me"
     NUTRITION_SECRET_NAME = data.aws_secretsmanager_secret.nutrition_api_key.name
     MEAL_EVENTS_ARN = aws_sns_topic.meal_events.arn
+    PK_NAME             = "pk"
+    SK_NAME              = "sk"
     }
   }
 

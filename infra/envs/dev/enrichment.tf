@@ -193,8 +193,8 @@ resource "aws_lambda_function" "meal_enricher" {
   function_name = local.meal_enricher_name
   role          = aws_iam_role.meal_role.arn
   runtime       = "python3.12"
-  handler       = "meal_enricher.handler"
-  filename      = "${path.module}/lambda_meal_enricher.zip"
+handler        = "meal_enricher.lambda_handler"
+filename       = "${path.module}/lambda_meal_enricher.zip"
   source_code_hash = filebase64sha256("${path.module}/lambda_meal_enricher.zip")
   timeout       = 20
 
