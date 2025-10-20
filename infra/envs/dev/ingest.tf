@@ -126,7 +126,7 @@ resource "aws_lambda_function" "ingest" {
   function_name = local.lambda_name
   role          = aws_iam_role.ingest_role.arn
   runtime       = "python3.12"
-  handler       = "ingest.handler"
+  handler = "ingest.lambda_handler"
   filename         = "${path.module}/lambda_ingest.zip"
   source_code_hash = filebase64sha256("${path.module}/lambda_ingest.zip")
   timeout       = 10
@@ -140,6 +140,8 @@ resource "aws_lambda_function" "ingest" {
     MEAL_EVENTS_ARN = aws_sns_topic.meal_events.arn
     }
   }
+
+  depends_on = [aws_sns_topic.meal_events]
 }
 
 # Optional SNS or Dynamo triggers can be added later
