@@ -1,6 +1,8 @@
 # ingest.py
 import os, json, time, uuid, urllib.parse
 import boto3
+from decimal import Decimal
+
 
 # ---- AWS clients/resources ----
 dynamodb_res = boto3.resource("dynamodb")
@@ -25,7 +27,15 @@ def _get_key_schema():
     sk = SK_ENV or "sk"  # if your table had no sort key, set this to None
     return (pk, "S", sk, "S")
 
-
+def to_decimal(x):
+    if isinstance(x, float):
+        # str() preserves value textually so Decimal is exact enough for DDB
+        return Decimal(str(x))
+    if isinstance(x, dict):
+        return {k: to_decimal(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [to_decimal(v) for v in x]
+    return x
 
 def _now_parts():
     ts_ms = int(time.time() * 1000)
@@ -102,7 +112,7 @@ def lambda_handler(event, context):
 
     # Write to DynamoDB
     table = dynamodb_res.Table(EVENTS_TABLE)
-    table.put_item(Item=item)
+    table.put_item(Item=to_decimal(item))
 
     # Fan-out meals to SNS (meal enricher)
     if is_meal and MEAL_EVENTS_ARN:

@@ -3,6 +3,8 @@ import os
 import boto3
 import urllib.request
 import urllib.error
+from decimal import Decimal
+
 
 # --- AWS setup ---
 dynamodb = boto3.resource("dynamodb")
@@ -26,6 +28,16 @@ def get_nutritionix_creds():
     creds = json.loads(resp["SecretString"])
     _creds_cache = creds
     return creds
+
+def to_decimal(x):
+    if isinstance(x, float):
+        # str() preserves value textually so Decimal is exact enough for DDB
+        return Decimal(str(x))
+    if isinstance(x, dict):
+        return {k: to_decimal(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [to_decimal(v) for v in x]
+    return x
 
 
 def nutritionix_lookup(query: str, timezone: str = "US/Eastern"):
