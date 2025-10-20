@@ -206,6 +206,7 @@ filename       = "${path.module}/lambda_meal_enricher.zip"
       CURATED_BUCKET        = aws_s3_bucket.curated.bucket
       NOTIFY_TOPIC          = aws_sns_topic.notifications.arn
       NUTRITION_SECRET_NAME = data.aws_secretsmanager_secret.nutrition_api_key.name
+      EVENTS_TABLE           = aws_dynamodb_table.events.name
     }
   }
 }
