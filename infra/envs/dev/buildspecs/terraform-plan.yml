@@ -12,6 +12,23 @@ phases:
       - unzip t.zip && mv terraform /usr/local/bin/ && rm -f t.zip
   pre_build:
     commands:
+      # --- build the Requests Lambda layer ---
+      - yum -y install zip || true
+      - python3 -m pip install --upgrade pip
+      - LAYER_DIR=lambda/requests-layer
+      - mkdir -p $LAYER_DIR/python
+      - rm -f lambda/requests-layer.zip || true
+      - python3 -m pip install requests -t $LAYER_DIR/python
+      - (cd $LAYER_DIR && zip -r ../requests-layer.zip python >/dev/null)
+      - test -f lambda/requests-layer.zip || (echo "Layer zip not created" && exit 1)
+
+      # existing lines you already have…
+      - cd infra/envs/dev
+      - rm -f lambda_ingest.zip  lambda_meal_enricher.zip
+      - zip -j lambda_ingest.zip     lambda/ingest.py
+      - zip -j lambda_meal_enricher.zip lambda/meal_enricher.py
+      - terraform init -input=false
+
       - cd infra/envs/dev
       # build the same lambda zip that apply will use
       - mkdir -p lambda
