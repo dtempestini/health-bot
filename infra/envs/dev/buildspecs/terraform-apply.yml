@@ -1,35 +1,53 @@
 version: 0.2
+
 env:
   variables:
     TF_IN_AUTOMATION: "1"
     TF_VAR_billing_email: "david.tempestini@gmail.com"
     TF_VAR_codestar_connection_arn: "arn:aws:codeconnections:us-east-1:684441749407:connection/f2fc225f-b9aa-429b-ab41-50de95dc71d9"
     TF_VAR_github_repo: "dtempestini/health-bot"
+
+# MUST match the pipeline's artifact name from the Plan stage
 input_artifacts:
   - name: tfplan_output
+
 phases:
   install:
     commands:
       - curl -fsSL https://releases.hashicorp.com/terraform/1.13.4/terraform_1.13.4_linux_amd64.zip -o t.zip
       - unzip -q t.zip && mv terraform /usr/local/bin/ && rm -f t.zip
+
   pre_build:
     commands:
+      # resolve paths
       - ROOT="$CODEBUILD_SRC_DIR"
-      - ENV_DIR="$CODEBUILD_SRC_DIR/infra/envs/dev"
-      - LAYER_DIR="$CODEBUILD_SRC_DIR/lambda/requests-layer"
+      - ENV_DIR="$ROOT/infra/envs/dev"
+      - LAYER_DIR="$ROOT/lambda/requests-layer"
+      # CodeBuild exposes the additional artifact here:
+      - PLAN_DIR="${CODEBUILD_SRC_DIR_TFPLAN_OUTPUT}"
+      - echo "Plan dir is: $PLAN_DIR"
+      - test -f "$PLAN_DIR/infra/envs/dev/tfplan" || { echo "ERROR: plan file not found in artifact"; ls -R "$PLAN_DIR"; exit 1; }
+
+      # (re)build layer & zips so TF can upload them if needed
       - yum -y install zip || true
       - python3 -m pip install --upgrade pip
       - mkdir -p "$LAYER_DIR/python"
-      - rm -f "$CODEBUILD_SRC_DIR/lambda/requests-layer.zip" || true
+      - rm -f  "$ROOT/lambda/requests-layer.zip" || true
       - python3 -m pip install requests -t "$LAYER_DIR/python"
       - (cd "$LAYER_DIR" && zip -r ../requests-layer.zip python >/dev/null)
-      - test -f "$CODEBUILD_SRC_DIR/lambda/requests-layer.zip" || (echo "Layer zip not created" && exit 1)
+      - test -f "$ROOT/lambda/requests-layer.zip" || { echo "Layer zip not created"; exit 1; }
+
       - cd "$ENV_DIR"
       - rm -f lambda_ingest.zip lambda_meal_enricher.zip
       - zip -j lambda_ingest.zip       lambda/ingest.py
       - zip -j lambda_meal_enricher.zip lambda/meal_enricher.py
+
+      # init in the working dir where we'll apply
       - terraform init -input=false
+
+      # copy plan to expected location
+      - cp "$PLAN_DIR/infra/envs/dev/tfplan" "$ENV_DIR/tfplan"
+
   build:
     commands:
-      - terraform apply -input=false -auto-approve infra/envs/dev/tfplan
-
+      - terraform apply -input=false -auto-approve "$ENV_DIR/tfplan"

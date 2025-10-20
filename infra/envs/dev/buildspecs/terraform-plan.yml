@@ -1,39 +1,48 @@
 version: 0.2
+
 env:
   variables:
     TF_IN_AUTOMATION: "1"
     TF_VAR_billing_email: "david.tempestini@gmail.com"
     TF_VAR_codestar_connection_arn: "arn:aws:codeconnections:us-east-1:684441749407:connection/f2fc225f-b9aa-429b-ab41-50de95dc71d9"
     TF_VAR_github_repo: "dtempestini/health-bot"
+
 phases:
   install:
     commands:
       - curl -fsSL https://releases.hashicorp.com/terraform/1.13.4/terraform_1.13.4_linux_amd64.zip -o t.zip
       - unzip -q t.zip && mv terraform /usr/local/bin/ && rm -f t.zip
+
   pre_build:
     commands:
-      # resolve dirs
+      # paths
       - ROOT="$CODEBUILD_SRC_DIR"
-      - ENV_DIR="$CODEBUILD_SRC_DIR/infra/envs/dev"
-      - LAYER_DIR="$CODEBUILD_SRC_DIR/lambda/requests-layer"
+      - ENV_DIR="$ROOT/infra/envs/dev"
+      - LAYER_DIR="$ROOT/lambda/requests-layer"
+
       # build requests layer
       - yum -y install zip || true
       - python3 -m pip install --upgrade pip
       - mkdir -p "$LAYER_DIR/python"
-      - rm -f "$CODEBUILD_SRC_DIR/lambda/requests-layer.zip" || true
+      - rm -f "$ROOT/lambda/requests-layer.zip" || true
       - python3 -m pip install requests -t "$LAYER_DIR/python"
       - (cd "$LAYER_DIR" && zip -r ../requests-layer.zip python >/dev/null)
-      - test -f "$CODEBUILD_SRC_DIR/lambda/requests-layer.zip" || (echo "Layer zip not created" && exit 1)
-      # package lambdas
+      - test -f "$ROOT/lambda/requests-layer.zip" || (echo "Layer zip not created" && exit 1)
+
+      # package lambdas used by TF
       - cd "$ENV_DIR"
       - rm -f lambda_ingest.zip lambda_meal_enricher.zip
       - zip -j lambda_ingest.zip       lambda/ingest.py
       - zip -j lambda_meal_enricher.zip lambda/meal_enricher.py
+
+      # terraform init
       - terraform init -input=false
+
   build:
     commands:
       - terraform validate
       - terraform plan -input=false -out=tfplan
+
 artifacts:
   files:
     - infra/envs/dev/tfplan
