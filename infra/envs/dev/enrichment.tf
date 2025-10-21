@@ -9,19 +9,34 @@
 # DYNAMODB TABLES
 ############################
 
+# --- DynamoDB: custom food overrides ---
 resource "aws_dynamodb_table" "hb_food_overrides_dev" {
   name         = "hb_food_overrides_dev"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute { name = "pk"; type = "S" }
-  attribute { name = "sk"; type = "S" }
+  attribute {
+    name = "pk"
+    type = "S"
+  }
 
-  point_in_time_recovery { enabled = true }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
 
-  tags = { app = "health-bot", stack = "dev", part = "food_overrides" }
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "food_overrides"
+  }
 }
+
 
 
 resource "aws_dynamodb_table" "hb_meals_dev" {
@@ -219,10 +234,10 @@ data "aws_iam_policy_document" "meal_enricher_access" {
   }
 
   statement {
-    sid     = "FoodOverridesRW"
-    actions = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem","dynamodb:Query","dynamodb:DescribeTable","dynamodb:UpdateItem"]
+    sid       = "FoodOverridesRW"
+    actions   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:DescribeTable", "dynamodb:UpdateItem"]
     resources = [aws_dynamodb_table.hb_food_overrides_dev.arn]
-    }
+  }
 
 
   statement {
@@ -243,36 +258,36 @@ data "aws_iam_policy_document" "meal_enricher_access" {
     resources = ["*"]
   }
 
-    statement {
-        sid     = "MedsRW"
-        actions = [
-            "dynamodb:PutItem",
-            "dynamodb:GetItem",
-            "dynamodb:Query",
-            "dynamodb:DescribeTable",
-            "dynamodb:UpdateItem"
-        ]
-        resources = [
-            aws_dynamodb_table.hb_meds_dev.arn,
-            "${aws_dynamodb_table.hb_meds_dev.arn}/index/*"        # <— add this
-        ]
-    }
+  statement {
+    sid = "MedsRW"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+      "dynamodb:Query",
+      "dynamodb:DescribeTable",
+      "dynamodb:UpdateItem"
+    ]
+    resources = [
+      aws_dynamodb_table.hb_meds_dev.arn,
+      "${aws_dynamodb_table.hb_meds_dev.arn}/index/*" # <— add this
+    ]
+  }
 
-    statement {
-        sid     = "MigrainesRW"
-        actions = [
-            "dynamodb:PutItem",
-            "dynamodb:GetItem",
-            "dynamodb:UpdateItem",
-            "dynamodb:Query",
-            "dynamodb:DeleteItem",
-            "dynamodb:DescribeTable"
-        ]
-        resources = [
-            aws_dynamodb_table.hb_migraines_dev.arn,
-            "${aws_dynamodb_table.hb_migraines_dev.arn}/index/*"   # <— add this
-        ]
-    }
+  statement {
+    sid = "MigrainesRW"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+      "dynamodb:DeleteItem",
+      "dynamodb:DescribeTable"
+    ]
+    resources = [
+      aws_dynamodb_table.hb_migraines_dev.arn,
+      "${aws_dynamodb_table.hb_migraines_dev.arn}/index/*" # <— add this
+    ]
+  }
 
 }
 

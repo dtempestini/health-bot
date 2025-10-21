@@ -16,35 +16,35 @@ resource "aws_iam_role" "stats_role" {
 # Read-only access to the four tables
 data "aws_iam_policy_document" "stats_ro" {
   statement {
-    sid     = "ReadMeals"
-    actions = ["dynamodb:Query","dynamodb:GetItem","dynamodb:DescribeTable"]
+    sid       = "ReadMeals"
+    actions   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.hb_meals_dev.arn]
   }
   statement {
-    sid     = "ReadTotals"
-    actions = ["dynamodb:Query","dynamodb:GetItem","dynamodb:DescribeTable"]
+    sid       = "ReadTotals"
+    actions   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.hb_daily_totals_dev.arn]
   }
-    statement {
-        sid     = "ReadMeds"
-        actions = ["dynamodb:Query","dynamodb:GetItem","dynamodb:DescribeTable"]
-        resources = [
-            aws_dynamodb_table.hb_meds_dev.arn,
-            "${aws_dynamodb_table.hb_meds_dev.arn}/index/*"
-        ]
-    }
-
-    statement {
-        sid     = "ReadMigraines"
-        actions = ["dynamodb:Query","dynamodb:GetItem","dynamodb:DescribeTable"]
-        resources = [
-            aws_dynamodb_table.hb_migraines_dev.arn,
-            "${aws_dynamodb_table.hb_migraines_dev.arn}/index/*"
-        ]
-    }
   statement {
-    sid     = "Logs"
-    actions = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"]
+    sid     = "ReadMeds"
+    actions = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:DescribeTable"]
+    resources = [
+      aws_dynamodb_table.hb_meds_dev.arn,
+      "${aws_dynamodb_table.hb_meds_dev.arn}/index/*"
+    ]
+  }
+
+  statement {
+    sid     = "ReadMigraines"
+    actions = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:DescribeTable"]
+    resources = [
+      aws_dynamodb_table.hb_migraines_dev.arn,
+      "${aws_dynamodb_table.hb_migraines_dev.arn}/index/*"
+    ]
+  }
+  statement {
+    sid       = "Logs"
+    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:*:*:*"]
   }
 }
@@ -94,7 +94,7 @@ resource "aws_apigatewayv2_api" "stats_api" {
   # Optional API-level CORS (Lambda also returns CORS headers)
   cors_configuration {
     allow_origins = ["*"]
-    allow_methods = ["GET","OPTIONS"]
+    allow_methods = ["GET", "OPTIONS"]
     allow_headers = ["*"]
   }
 }
