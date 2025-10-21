@@ -61,21 +61,26 @@ def _get_twilio():
         "from": cfg["from_number"]
     }
 
-def _send_sms(to_number, body):
-    tw = _get_twilio()
-    if not tw or not to_number:
-        return
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{tw['sid']}/Messages.json"
-    auth = (tw["sid"], tw["token"])
-    data = {
-        "From": tw["from"],
-        "To": to_number,
-        "Body": body
-    }
-    r = requests.post(url, auth=auth, data=data, timeout=10)
-    if r.status_code not in (200, 201):
-        # Don't crash the Lambda—just log
-        print(f"Twilio send failed {r.status_code}: {r.text}")
+def _send_sms(to_number: str, body: str):
+    # read creds + base "from" (usually "+1...") from Secrets
+    sec = secrets.get_secret_value(SecretId=TWILIO_SECRET_NAME)
+    cfg = json.loads(sec["SecretString"])
+    account_sid = cfg["account_sid"]
+    auth_token  = cfg["auth_token"]
+    from_number = cfg["from"]  # keep as plain +1... in Secrets
+
+    # --- Normalize channel so From/To match (SMS vs WhatsApp) ---
+    if to_number.startswith("whatsapp:"):
+        # Wrap the from_number with the same channel prefix
+        from_number = "whatsapp:" + from_number.lstrip("+")
+        to_number   = "whatsapp:" + to_number.lstrip("+")
+
+    client = Client(account_sid, auth_token)
+    try:
+        client.messages.create(from_=from_number, to=to_number, body=body)
+    except Exception as e:
+        print(f"Twilio send failed 400: {e}")
+
 
 # ---------- handler ----------
 
@@ -122,10 +127,6 @@ def lambda_handler(event, context):
         # 3) optional SMS reply with macros
         if sender:
             body = f"Logged: {text}\nCalories {macros['calories']}, P {macros['protein']}g, C {macros['carbs']}g, F {macros['fat']}g."
-            if sender.startswith("whatsapp:"):
-                from_number = "whatsapp:" + from_number.lstrip("+")
-                sender = "whatsapp:" + sender.lstrip("+")
-
             _send_sms(sender, body)
 
         print(f"Enrichment stored OK {meal_pk} {ts}")
