@@ -715,6 +715,8 @@ def lambda_handler(event, context):
             _handle_undo(sender, dt, simulate=simulate)             # <<< add simulate
         elif lower == "/reset today":
             _handle_reset_today(sender, dt, simulate=simulate)      # <<< add simulate
+        elif lower == "/meds":
+            _handle_meds(sender)
         elif lower.startswith("/migraine"):
             _handle_migraine(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)  # <<< add simulate
         elif lower.startswith("/med"):
@@ -722,9 +724,6 @@ def lambda_handler(event, context):
         elif lower.startswith("meal:") or lower.startswith("meal "):
             meal_text = raw_text.split(":", 1)[1].strip() if ":" in raw_text else raw_text.split(" ", 1)[1].strip()
             _handle_meal(sender, dt, ts_ms, meal_pk, meal_text, simulate=simulate) if meal_text else _send_sms(sender, "Try: meal: greek yogurt + berries")  # <<< add simulate
-        elif lower == "/meds":
-            _handle_meds(sender)
-
 
         else:
             _send_sms(sender, "Unrecognized. Send `meal: ...`, `/summary`, `/week`, `/month`, `/lookup: ...`, `/undo`, `/reset today`, `/migraine ...`, `/med ...`, or `/help`")
