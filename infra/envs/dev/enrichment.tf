@@ -1,6 +1,6 @@
 ##
 ## PHASE 2: Meal Enricher + Daily Totals + WhatsApp replies
-## Tables: hb_meals_dev, hb_daily_totals_dev
+## Tables: hb_meals_dev, hb_daily_totals_dev, hb_migraines_dev, hb_meds_dev
 ## Lambda: hb_meal_enricher_dev
 ## SNS sub: hb_meal_events_dev -> hb_meal_enricher_dev
 ##
@@ -36,7 +36,7 @@ resource "aws_dynamodb_table" "hb_meals_dev" {
   }
 }
 
-# Daily totals (current pattern: pk="total#me", sk="YYYY-MM-DD")
+# Daily totals (pattern: pk="total#me", sk="YYYY-MM-DD")
 resource "aws_dynamodb_table" "hb_daily_totals_dev" {
   name         = "hb_daily_totals_dev"
   billing_mode = "PAY_PER_REQUEST"
@@ -73,22 +73,43 @@ resource "aws_dynamodb_table" "hb_migraines_dev" {
   hash_key     = "pk"                   # user id (e.g., "me")
   range_key    = "sk"                   # "migraine#<episode_id>"
 
-  attribute { name = "pk"; type = "S" }
-  attribute { name = "sk"; type = "S" }
-
-  # query helpers (optional, for future)
-  attribute { name = "dt";       type = "S" } # YYYY-MM-DD (start date)
-  attribute { name = "is_open";  type = "N" } # 1 if not ended
-
-  global_secondary_index {
-    name               = "gsi_open"
-    hash_key           = "pk"
-    range_key          = "is_open"
-    projection_type    = "ALL"
+  attribute {
+    name = "pk"
+    type = "S"
   }
 
-  point_in_time_recovery { enabled = true }
-  tags = { app = "health-bot", stack = "dev", part = "migraines" }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  # query helpers (optional, for future)
+  attribute {
+    name = "dt"
+    type = "S"
+  } # YYYY-MM-DD (start date)
+
+  attribute {
+    name = "is_open"
+    type = "N"
+  } # 1 if not ended
+
+  global_secondary_index {
+    name            = "gsi_open"
+    hash_key        = "pk"
+    range_key       = "is_open"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "migraines"
+  }
 }
 
 ################################
@@ -100,9 +121,20 @@ resource "aws_dynamodb_table" "hb_meds_dev" {
   hash_key     = "pk"                 # user id
   range_key    = "sk"                 # "dt#<ms>"
 
-  attribute { name = "pk"; type = "S" }
-  attribute { name = "sk"; type = "S" }
-  attribute { name = "dt"; type = "S" }  # YYYY-MM-DD
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  attribute {
+    name = "dt"
+    type = "S"
+  } # YYYY-MM-DD
 
   global_secondary_index {
     name            = "gsi_dt"
@@ -111,16 +143,22 @@ resource "aws_dynamodb_table" "hb_meds_dev" {
     projection_type = "ALL"
   }
 
-  point_in_time_recovery { enabled = true }
-  tags = { app = "health-bot", stack = "dev", part = "meds" }
-}
+  point_in_time_recovery {
+    enabled = true
+  }
 
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "meds"
+  }
+}
 
 ############################
 # LOOKUPS FOR EXISTING RESOURCES
 ############################
 
-# SNS created in ingest.tf
+# SNS created in ingest.tf (hb_meal_events_dev)
 data "aws_sns_topic" "hb_meal_events_dev" {
   name = "hb_meal_events_dev"
 }
@@ -134,7 +172,7 @@ data "aws_dynamodb_table" "hb_events_dev" {
 # IAM (ROLE + POLICY)
 ############################
 
-# Reuse the assume-role policy declared in ingest.tf
+# Reuse the assume-role policy declared in ingest.tf:
 # data.aws_iam_policy_document.lambda_assume
 
 resource "aws_iam_role" "hb_meal_enricher_dev" {
@@ -176,8 +214,8 @@ data "aws_iam_policy_document" "meal_enricher_access" {
     actions = ["secretsmanager:GetSecretValue"]
     resources = ["*"]
   }
-  
-    statement {
+
+  statement {
     sid     = "MigrainesRW"
     actions = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:UpdateItem","dynamodb:Query","dynamodb:DeleteItem","dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.hb_migraines_dev.arn]
@@ -204,12 +242,12 @@ resource "aws_iam_role_policy_attachment" "meal_enricher_access_attach" {
 # LAMBDA (zip produced at infra/envs/dev by your buildspec)
 ############################
 
-# Publish the requests layer built by CodeBuild
+# Publish the requests layer built by CodeBuild (copied to infra/envs/dev/lambda/requests-layer.zip)
 resource "aws_lambda_layer_version" "requests" {
   layer_name               = "requests-layer-dev"
   filename                 = "${path.module}/lambda/requests-layer.zip"
   compatible_runtimes      = ["python3.12"]
-  compatible_architectures = ["x86_64"] # keep in sync with your function arch
+  compatible_architectures = ["x86_64"]
   description              = "Requests lib for meal_enricher"
 }
 
@@ -224,6 +262,7 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
   publish          = true
   timeout          = 30
   memory_size      = 512
+  layers           = [aws_lambda_layer_version.requests.arn]
 
   environment {
     variables = {
@@ -232,6 +271,9 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
       MEALS_TABLE           = aws_dynamodb_table.hb_meals_dev.name
       TOTALS_TABLE          = aws_dynamodb_table.hb_daily_totals_dev.name
       EVENTS_TABLE          = data.aws_dynamodb_table.hb_events_dev.name
+
+      MIGRAINES_TABLE       = aws_dynamodb_table.hb_migraines_dev.name
+      MEDS_TABLE            = aws_dynamodb_table.hb_meds_dev.name
 
       NUTRITION_SECRET_NAME = "hb_nutrition_api_key_dev"
       TWILIO_SECRET_NAME    = "hb_twilio_dev"
@@ -245,11 +287,12 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
     app   = "health-bot"
     stack = "dev"
   }
-
-    layers = [aws_lambda_layer_version.requests.arn]
 }
 
-# Ops alarm topic (reuse billing email for now)
+############################
+# OPS: CloudWatch Alarm + SNS
+############################
+
 resource "aws_sns_topic" "ops_alarms_dev" {
   name = "hb_ops_alarms_dev"
 }
@@ -279,7 +322,6 @@ resource "aws_cloudwatch_metric_alarm" "meal_enricher_errors" {
   alarm_actions = [aws_sns_topic.ops_alarms_dev.arn]
   ok_actions    = [aws_sns_topic.ops_alarms_dev.arn]
 }
-
 
 ############################
 # SNS SUBSCRIPTION + PERMISSION
