@@ -70,30 +70,15 @@ resource "aws_dynamodb_table" "hb_daily_totals_dev" {
 resource "aws_dynamodb_table" "hb_migraines_dev" {
   name         = "hb_migraines_dev"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "pk"                   # user id (e.g., "me")
-  range_key    = "sk"                   # "migraine#<episode_id>"
+  hash_key     = "pk"
+  range_key    = "sk"
 
-  attribute {
-    name = "pk"
-    type = "S"
-  }
+  attribute { name = "pk"; type = "S" }
+  attribute { name = "sk"; type = "S" }
+  attribute { name = "dt"; type = "S" }     # YYYY-MM-DD for start date
+  attribute { name = "is_open"; type = "N" }# 1 if not ended
 
-  attribute {
-    name = "sk"
-    type = "S"
-  }
-
-  # query helpers (optional, for future)
-  attribute {
-    name = "dt"
-    type = "S"
-  } # YYYY-MM-DD (start date)
-
-  attribute {
-    name = "is_open"
-    type = "N"
-  } # 1 if not ended
-
+  # Find open episode quickly
   global_secondary_index {
     name            = "gsi_open"
     hash_key        = "pk"
@@ -101,9 +86,15 @@ resource "aws_dynamodb_table" "hb_migraines_dev" {
     projection_type = "ALL"
   }
 
-  point_in_time_recovery {
-    enabled = true
+  # Query by date (e.g., month view)
+  global_secondary_index {
+    name            = "gsi_dt"
+    hash_key        = "dt"
+    range_key       = "sk"
+    projection_type = "ALL"
   }
+
+  point_in_time_recovery { enabled = true }
 
   tags = {
     app   = "health-bot"
@@ -111,6 +102,7 @@ resource "aws_dynamodb_table" "hb_migraines_dev" {
     part  = "migraines"
   }
 }
+
 
 ################################
 # NEW: DynamoDB for medications
