@@ -43,9 +43,9 @@ phases:
       - mkdir -p "$ENV_DIR/lambda"
       - cp "$ROOT/lambda/requests-layer.zip" "$ENV_DIR/lambda/requests-layer.zip"
       - ls -l "$ENV_DIR/lambda"  # debug
+      - terraform init -input=false
       - terraform fmt -recursive
       - terraform validate
-      - terraform init -input=false
 
       # place plan where apply expects it
       - cp "${PLAN_DIR}/infra/envs/dev/tfplan" "${ENV_DIR}/tfplan"

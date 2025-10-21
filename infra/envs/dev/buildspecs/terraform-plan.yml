@@ -36,9 +36,9 @@ phases:
       - zip -j lambda_meal_enricher.zip lambda/meal_enricher.py
 
       # terraform init
+      - terraform init -input=false
       - terraform fmt -recursive
       - terraform validate
-      - terraform init -input=false
 
   build:
     commands:
