@@ -1,3 +1,22 @@
+version: 0.2
+
+env:
+  variables:
+    TF_IN_AUTOMATION: "1"
+    TF_VAR_billing_email: "david.tempestini@gmail.com"
+    TF_VAR_codestar_connection_arn: "arn:aws:codeconnections:us-east-1:684441749407:connection/f2fc225f-b9aa-429b-ab41-50de95dc71d9"
+    TF_VAR_github_repo: "dtempestini/health-bot"
+
+# must match the pipeline’s additional input artifact name
+input_artifacts:
+  - name: tfplan_output
+
+phases:
+  install:
+    commands:
+      - curl -fsSL https://releases.hashicorp.com/terraform/1.13.4/terraform_1.13.4_linux_amd64.zip -o t.zip
+      - unzip -q t.zip && mv terraform /usr/local/bin/ && rm -f t.zip
+
 pre_build:
   commands:
     # resolve paths
@@ -8,8 +27,6 @@ pre_build:
     # accept either tfplan_output or plan_output as the artifact name
     - PLAN_DIR="${CODEBUILD_SRC_DIR_TFPLAN_OUTPUT:-${CODEBUILD_SRC_DIR_plan_output}}"
     - 'echo "Plan dir is: ${PLAN_DIR}"'
-    - env | sort | grep CODEBUILD_SRC_DIR
-
     - 'test -n "${PLAN_DIR}" || { echo "ERROR: PLAN_DIR is empty (no extra artifact mounted)"; env | sort | grep CODEBUILD_SRC_DIR; exit 1; }'
 
     # make sure the plan file is present inside the artifact
@@ -36,3 +53,4 @@ pre_build:
 build:
   commands:
     - terraform apply -input=false -auto-approve "${ENV_DIR}/tfplan"
+
