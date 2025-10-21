@@ -221,17 +221,37 @@ data "aws_iam_policy_document" "meal_enricher_access" {
     resources = ["*"]
   }
 
-  statement {
-    sid       = "MigrainesRW"
-    actions   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:DeleteItem", "dynamodb:DescribeTable"]
-    resources = [aws_dynamodb_table.hb_migraines_dev.arn]
-  }
+    statement {
+        sid     = "MedsRW"
+        actions = [
+            "dynamodb:PutItem",
+            "dynamodb:GetItem",
+            "dynamodb:Query",
+            "dynamodb:DescribeTable",
+            "dynamodb:UpdateItem"
+        ]
+        resources = [
+            aws_dynamodb_table.hb_meds_dev.arn,
+            "${aws_dynamodb_table.hb_meds_dev.arn}/index/*"        # <— add this
+        ]
+    }
 
-  statement {
-    sid       = "MedsRW"
-    actions   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DescribeTable"]
-    resources = [aws_dynamodb_table.hb_meds_dev.arn]
-  }
+    statement {
+        sid     = "MigrainesRW"
+        actions = [
+            "dynamodb:PutItem",
+            "dynamodb:GetItem",
+            "dynamodb:UpdateItem",
+            "dynamodb:Query",
+            "dynamodb:DeleteItem",
+            "dynamodb:DescribeTable"
+        ]
+        resources = [
+            aws_dynamodb_table.hb_migraines_dev.arn,
+            "${aws_dynamodb_table.hb_migraines_dev.arn}/index/*"   # <— add this
+        ]
+    }
+
 }
 
 resource "aws_iam_policy" "meal_enricher_access" {

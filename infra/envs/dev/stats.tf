@@ -25,16 +25,23 @@ data "aws_iam_policy_document" "stats_ro" {
     actions = ["dynamodb:Query","dynamodb:GetItem","dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.hb_daily_totals_dev.arn]
   }
-  statement {
-    sid     = "ReadMeds"
-    actions = ["dynamodb:Query","dynamodb:GetItem","dynamodb:DescribeTable"]
-    resources = [aws_dynamodb_table.hb_meds_dev.arn]
-  }
-  statement {
-    sid     = "ReadMigraines"
-    actions = ["dynamodb:Query","dynamodb:GetItem","dynamodb:DescribeTable"]
-    resources = [aws_dynamodb_table.hb_migraines_dev.arn]
-  }
+    statement {
+        sid     = "ReadMeds"
+        actions = ["dynamodb:Query","dynamodb:GetItem","dynamodb:DescribeTable"]
+        resources = [
+            aws_dynamodb_table.hb_meds_dev.arn,
+            "${aws_dynamodb_table.hb_meds_dev.arn}/index/*"
+        ]
+    }
+
+    statement {
+        sid     = "ReadMigraines"
+        actions = ["dynamodb:Query","dynamodb:GetItem","dynamodb:DescribeTable"]
+        resources = [
+            aws_dynamodb_table.hb_migraines_dev.arn,
+            "${aws_dynamodb_table.hb_migraines_dev.arn}/index/*"
+        ]
+    }
   statement {
     sid     = "Logs"
     actions = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"]
