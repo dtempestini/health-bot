@@ -61,53 +61,67 @@ def _get_twilio():
         "from": cfg["from_number"]
     }
 
-def _send_sms(to_number: str, body: str):
-    # Load Twilio creds/config from Secrets Manager
-    sec = secrets.get_secret_value(SecretId=TWILIO_SECRET_NAME)
-    cfg = json.loads(sec["SecretString"])
+import json, os, requests
+import boto3
+
+secrets = boto3.client("secretsmanager")
+TWILIO_SECRET_NAME = os.environ.get("TWILIO_SECRET_NAME", "hb_twilio_dev")
+
+def _send_sms(to_number: str, body: str) -> None:
+    """
+    Send a reply via Twilio. Works for plain SMS (+1...) and WhatsApp (whatsapp:+1...).
+    Secrets JSON may be either:
+      {"account_sid":"AC...","auth_token":"...","from":"+1XXXXXXXXXX"}
+    or (recommended, supports both channels explicitly):
+      {"account_sid":"AC...","auth_token":"...","from_sms":"+1XXXXXXXXXX","from_wa":"whatsapp:+14155238886"}
+    If `from_wa` is omitted, the WhatsApp sandbox number is used by default.
+    """
+
+    # 1) load creds
+    sec = secrets.get_secret_value(SecretId=TWILIO_SECRET_NAME)["SecretString"]
+    cfg = json.loads(sec)
 
     account_sid = cfg["account_sid"]
     auth_token  = cfg["auth_token"]
 
-    from_number = (
-        cfg.get("from")
-        or cfg.get("from_number")
-        or cfg.get("twilio_from")
-    )
-    messaging_service_sid = cfg.get("messaging_service_sid")
+    # allow either "from" or "from_sms"
+    from_sms = cfg.get("from_sms") or cfg.get("from")
+    # default WA From is sandbox number; override with from_wa if you set one
+    from_wa  = cfg.get("from_wa", "whatsapp:+14155238886")
 
-    # Normalize channel
-    to_number = to_number.strip()
-    is_whatsapp = to_number.startswith("whatsapp:")
+    if not from_sms:
+        print("Twilio send skipped: missing from/from_sms in Secrets.")
+        return
 
-    if is_whatsapp:
-        if not from_number:
-            raise RuntimeError("Missing 'from' number in secret for WhatsApp sends.")
-        from_number = "whatsapp:" + from_number.lstrip("+")
-        to_number   = "whatsapp:" + to_number.replace("whatsapp:", "").lstrip("+")
+    # 2) decide channel from the *to_number*
+    n = (to_number or "").strip()
+
+    if n.startswith("whatsapp:"):
+        # WhatsApp: make sure both ends carry the WA prefix
+        from_number = from_wa
+        # normalize recipient to 'whatsapp:+<digits>'
+        n = "whatsapp:" + n.replace("whatsapp:", "").lstrip("+")
     else:
-        if from_number and not from_number.startswith("+"):
-            from_number = "+" + from_number
-        if not to_number.startswith("+"):
-            to_number = "+" + to_number
+        # SMS: both To and From must be plain E.164 like +1...
+        from_number = from_sms
+        # strip accidental 'whatsapp:' if present
+        n = n.replace("whatsapp:", "")
 
-    # Build payload
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
-    data = {"To": to_number, "Body": body}
-    if is_whatsapp or not messaging_service_sid:
-        if not from_number:
-            raise RuntimeError("No 'from' number found in secret (keys tried: 'from', 'from_number', 'twilio_from').")
-        data["From"] = from_number
-    else:
-        data["MessagingServiceSid"] = messaging_service_sid
+    # 3) fire Twilio REST (no SDK required)
+    url  = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
+    data = {"From": from_number, "To": n, "Body": body}
 
     try:
-        resp = requests.post(url, data=data, auth=(account_sid, auth_token), timeout=10)
-        if resp.status_code >= 300:
-            print(f"Twilio send failed {resp.status_code}: {resp.text}")
+        r = requests.post(url, data=data, auth=(account_sid, auth_token), timeout=10)
+        if r.status_code >= 400:
+            # surface Twilio error JSON (e.g., 21212, 21910, etc.)
+            print(f"Twilio send failed {r.status_code}: {r.text}")
+        else:
+            # optionally log the SID
+            sid = r.json().get("sid")
+            print(f"Twilio send OK sid={sid}")
     except Exception as e:
-        print(f"Twilio send failed: {e}")
-
+        print(f"Twilio send exception: {e}")
 
 
 # ---------- handler ----------
