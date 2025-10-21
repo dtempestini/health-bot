@@ -9,7 +9,7 @@ locals {
   api_name     = "hb_ingest_api_${local.env}"
 }
 
-# --- S3 RAW BUCKET (safe to create even if not present yet) ---
+# --- S3 RAW BUCKET ---
 resource "aws_s3_bucket" "raw" {
   bucket = local.raw_bucket
 }
@@ -38,25 +38,10 @@ resource "aws_dynamodb_table" "events" {
   hash_key  = "pk" # user id or "me"
   range_key = "sk" # ISO8601 timestamp
 
-  attribute {
-    name = "pk"
-    type = "S"
-  }
-
-  attribute {
-    name = "sk"
-    type = "S"
-  }
-
-  attribute {
-    name = "dt"
-    type = "S"
-  }
-
-  attribute {
-    name = "type"
-    type = "S"
-  }
+  attribute { name = "pk";   type = "S" }
+  attribute { name = "sk";   type = "S" }
+  attribute { name = "dt";   type = "S" }
+  attribute { name = "type"; type = "S" }
 
   global_secondary_index {
     name            = "gsi_dt"
@@ -69,7 +54,21 @@ resource "aws_dynamodb_table" "events" {
     Project = local.project_name
     Env     = local.env
   }
+}
 
+# --- NEW: SNS TOPIC used for meal events ---
+resource "aws_sns_topic" "meal_events" {
+  name = "hb_meal_events_${local.env}"
+  tags = {
+    Project = local.project_name
+    Env     = local.env
+  }
+}
+
+# --- NEW: Secrets Manager data source (Nutritionix) ---
+# If the secret already exists out-of-band, reference it by name here.
+data "aws_secretsmanager_secret" "nutrition_api_key" {
+  name = "hb_nutrition_api_key_dev"
 }
 
 # --- LAMBDA ROLE + POLICY ---
@@ -94,15 +93,11 @@ data "aws_iam_policy_document" "ingest_policy" {
     actions   = ["s3:PutObject", "s3:PutObjectAcl"]
     resources = ["${aws_s3_bucket.raw.arn}/*"]
   }
+
   statement {
     sid     = "DDBWriteAndDescribe"
-    actions = [
-        "dynamodb:PutItem",
-        "dynamodb:DescribeTable",
-    ]
-    resources = [
-      aws_dynamodb_table.events.arn
-    ]
+    actions = ["dynamodb:PutItem", "dynamodb:DescribeTable"]
+    resources = [aws_dynamodb_table.events.arn]
   }
 
   statement {
@@ -110,16 +105,18 @@ data "aws_iam_policy_document" "ingest_policy" {
     actions = ["sns:Publish"]
     resources = [aws_sns_topic.meal_events.arn]
   }
+
   statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:*:*:*"]
   }
+
   statement {
     sid     = "ReadNutritionSecretForIngest"
     actions = ["secretsmanager:GetSecretValue"]
-    resources = [data.aws_secretsmanager_secret.nutrition_api_key.arn] # or aws_secretsmanager_secret.nutrition_api_key.arn if TF owns it
-    }
+    resources = [data.aws_secretsmanager_secret.nutrition_api_key.arn]
+  }
 }
 
 resource "aws_iam_policy" "ingest_inline" {
@@ -134,34 +131,28 @@ resource "aws_iam_role_policy_attachment" "ingest_attach" {
 
 # --- LAMBDA FUNCTION ---
 resource "aws_lambda_function" "ingest" {
-  function_name = local.lambda_name
-  role          = aws_iam_role.ingest_role.arn
-  runtime       = "python3.12"
-  handler = "ingest.lambda_handler"
+  function_name    = local.lambda_name
+  role             = aws_iam_role.ingest_role.arn
+  runtime          = "python3.12"
+  handler          = "ingest.lambda_handler"
   filename         = "${path.module}/lambda_ingest.zip"
   source_code_hash = filebase64sha256("${path.module}/lambda_ingest.zip")
-  timeout       = 10
+  timeout          = 10
 
   environment {
     variables = {
-    RAW_BUCKET   = aws_s3_bucket.raw.bucket
-    EVENTS_TABLE = aws_dynamodb_table.events.name
-    USER_ID      = "me"
-    NUTRITION_SECRET_NAME = data.aws_secretsmanager_secret.nutrition_api_key.name
-    MEAL_EVENTS_ARN = aws_sns_topic.meal_events.arn
-    PK_NAME             = "pk"
-    SK_NAME              = "sk"
+      RAW_BUCKET            = aws_s3_bucket.raw.bucket
+      EVENTS_TABLE          = aws_dynamodb_table.events.name
+      USER_ID               = "me"
+      NUTRITION_SECRET_NAME = data.aws_secretsmanager_secret.nutrition_api_key.name
+      MEAL_EVENTS_ARN       = aws_sns_topic.meal_events.arn
+      PK_NAME               = "pk"
+      SK_NAME               = "sk"
     }
   }
 
   depends_on = [aws_sns_topic.meal_events]
 }
-
-# Optional SNS or Dynamo triggers can be added later
-output "meal_enricher_arn" {
-  value = aws_lambda_function.meal_enricher.arn
-}
-
 
 # --- API GATEWAY (HTTP API) + ROUTE ---
 resource "aws_apigatewayv2_api" "api" {
