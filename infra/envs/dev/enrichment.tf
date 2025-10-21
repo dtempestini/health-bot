@@ -9,6 +9,21 @@
 # DYNAMODB TABLES
 ############################
 
+resource "aws_dynamodb_table" "hb_food_overrides_dev" {
+  name         = "hb_food_overrides_dev"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute { name = "pk"; type = "S" }
+  attribute { name = "sk"; type = "S" }
+
+  point_in_time_recovery { enabled = true }
+
+  tags = { app = "health-bot", stack = "dev", part = "food_overrides" }
+}
+
+
 resource "aws_dynamodb_table" "hb_meals_dev" {
   name         = "hb_meals_dev"
   billing_mode = "PAY_PER_REQUEST"
@@ -204,6 +219,13 @@ data "aws_iam_policy_document" "meal_enricher_access" {
   }
 
   statement {
+    sid     = "FoodOverridesRW"
+    actions = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem","dynamodb:Query","dynamodb:DescribeTable","dynamodb:UpdateItem"]
+    resources = [aws_dynamodb_table.hb_food_overrides_dev.arn]
+    }
+
+
+  statement {
     sid       = "TotalsRW"
     actions   = ["dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.hb_daily_totals_dev.arn]
@@ -306,6 +328,9 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
 
       CALORIES_MAX = "1800"
       PROTEIN_MIN  = "190"
+
+      FOOD_OVERRIDES_TABLE = aws_dynamodb_table.hb_food_overrides_dev.name
+
     }
   }
 

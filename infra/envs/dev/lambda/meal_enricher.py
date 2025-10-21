@@ -26,7 +26,8 @@ DHE_LIMIT_DPM     = int(os.environ.get("DHE_LIMIT_DPM", "6"))
 COMBO_LIMIT_DPM   = int(os.environ.get("COMBO_LIMIT_DPM", "8"))     # e.g., Excedrin
 PAIN_LIMIT_DPM    = int(os.environ.get("PAIN_LIMIT_DPM", "12"))     # simple analgesics/NSAIDs
 NEAR_THRESH_PCT   = float(os.environ.get("NEAR_THRESH_PCT", "0.75"))
-
+FOOD_OVERRIDES_TABLE = os.environ.get("FOOD_OVERRIDES_TABLE", "hb_food_overrides_dev")
+over_tbl = ddb.Table(FOOD_OVERRIDES_TABLE)
 
 
 # NEW tables
@@ -49,6 +50,61 @@ meds_tbl    = ddb.Table(MEDS_TABLE)
 TZ = ZoneInfo("America/New_York")
 
 # ---------- helpers ----------
+def _norm_alias(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+def _get_override(alias: str):
+    try:
+        r = over_tbl.get_item(Key={"pk": USER_ID, "sk": _norm_alias(alias)})
+        return r.get("Item")
+    except Exception:
+        return None
+
+def _put_override(alias: str, macros: dict, note: str = ""):
+    item = {
+        "pk": USER_ID, "sk": _norm_alias(alias),
+        "kcal": _as_decimal(macros.get("calories",0)),
+        "protein": _as_decimal(macros.get("protein",0)),
+        "carbs": _as_decimal(macros.get("carbs",0)),
+        "fat": _as_decimal(macros.get("fat",0)),
+        "note": note, "updated_ms": _as_decimal(_now_ms())
+    }
+    over_tbl.put_item(Item=item)
+    return item
+
+def _del_override(alias: str):
+    over_tbl.delete_item(Key={"pk": USER_ID, "sk": _norm_alias(alias)})
+
+def _match_override_in_text(text: str):
+    """Return (alias, qty) if meal text contains a known alias; supports '2x alias' or 'alias x2'."""
+    t = _norm_alias(text)
+    # try simple xN patterns
+    m = re.search(r"(\d+)\s*x\s+([a-z].+)$", t)
+    if m:
+        qty = int(m.group(1)); alias = _norm_alias(m.group(2))
+        if _get_override(alias): return alias, qty
+    m = re.search(r"([a-z].+?)\s*x\s*(\d+)$", t)
+    if m:
+        alias = _norm_alias(m.group(1)); qty = int(m.group(2))
+        if _get_override(alias): return alias, qty
+    # direct alias match
+    parts = re.split(r"[,+/]| and ", t)
+    for p in parts:
+        a = _norm_alias(p)
+        if _get_override(a): return a, 1
+    return None, 0
+
+def _macros_from_override(alias: str, qty: int = 1):
+    it = _get_override(alias)
+    if not it: return None
+    q = max(1, int(qty))
+    return {
+        "calories": int(it.get("kcal",0))*q,
+        "protein": int(it.get("protein",0))*q,
+        "carbs":   int(it.get("carbs",0))*q,
+        "fat":     int(it.get("fat",0))*q
+    }
+
 def _month_bounds_est(ts_ms: int | None = None):
     now = datetime.now(TZ) if ts_ms is None else datetime.fromtimestamp(ts_ms/1000, TZ)
     start = now.replace(day=1).date()
@@ -288,6 +344,79 @@ def _sum_range(start_d: date, end_d: date) -> dict:
     days = (end_d - start_d).days + 1
     return {"cal": cal, "pro": pro, "carb": carb, "fat": fat, "days": days,
             "avg_cal": round(cal / days, 1), "avg_pro": round(pro / days, 1)}
+
+def _parse_macros_arg(s: str) -> dict | None:
+    # accepts k=, kcal=, p=, protein=, c=, carbs=, f=, fat=
+    if not s: return None
+    out = {"calories":0,"protein":0,"carbs":0,"fat":0}
+    for part in re.split(r"[,\s]+", s.strip()):
+        if not part: continue
+        if "=" not in part: continue
+        k,v = part.split("=",1)
+        try: v = int(float(v))
+        except: continue
+        k = k.lower()
+        if k in ("k","kcal","cal","calories"): out["calories"] = v
+        elif k in ("p","protein","prot"): out["protein"] = v
+        elif k in ("c","carbs","carb"): out["carbs"] = v
+        elif k in ("f","fat"): out["fat"] = v
+    return out
+
+def _handle_barcode(sender: str, args: str):
+    upc = (args or "").strip().replace(" ", "")
+    if not upc.isdigit():
+        _send_sms(sender, "Usage: /barcode <digits>"); return
+    sec = secrets.get_secret_value(SecretId=NUTRITION_SECRET_NAME)
+    cfg = json.loads(sec["SecretString"])
+    headers = {"x-app-id": cfg["app_id"], "x-app-key": cfg["app_key"]}
+    url = f"https://trackapi.nutritionix.com/v2/search/item?upc={upc}"
+    r = requests.get(url, headers=headers, timeout=10)
+    if r.status_code != 200:
+        _send_sms(sender, f"Lookup failed ({r.status_code})."); return
+    it = r.json().get("foods", [{}])[0]
+    kcal = int(round(it.get("nf_calories", 0) or 0))
+    pro  = int(round(it.get("nf_protein", 0) or 0))
+    carb = int(round(it.get("nf_total_carbohydrate", 0) or 0))
+    fat  = int(round(it.get("nf_total_fat", 0) or 0))
+    name = it.get("food_name","item")
+    _send_sms(sender, f"Barcode: {name}\n{ kcal } kcal ({ pro }P / { carb }C / { fat }F)\nTip: /food set {name} k={kcal} p={pro} c={carb} f={fat}")
+
+def _handle_food(sender: str, args: str):
+    # /food set <alias> k=... p=... c=... f=... [note...]
+    # /food del <alias>
+    # /food list
+    if not args:
+        _send_sms(sender, "Usage: /food set <alias> k=.. p=.. c=.. f=.. | /food del <alias> | /food list"); return
+    parts = args.split()
+    sub = parts[0].lower()
+
+    if sub == "list":
+        # simple scan by user (small scale)
+        r = over_tbl.query(KeyConditionExpression=Key("pk").eq(USER_ID))
+        items = r.get("Items", [])
+        if not items: _send_sms(sender, "No custom foods."); return
+        lines = ["Custom foods:"]
+        for it in items[:20]:
+            lines.append(f"• {it['sk']}: {int(it['kcal'])} kcal, P{int(it['protein'])} C{int(it['carbs'])} F{int(it['fat'])}")
+        _send_sms(sender, "\n".join(lines)); return
+
+    if sub == "del" and len(parts) >= 2:
+        alias = _norm_alias(" ".join(parts[1:]))
+        _del_override(alias)
+        _send_sms(sender, f"Deleted custom food: {alias}")
+        return
+
+    if sub == "set" and len(parts) >= 3:
+        alias = _norm_alias(parts[1])
+        macro_str = " ".join(parts[2:])
+        macros = _parse_macros_arg(macro_str)
+        if not macros or sum(macros.values()) == 0:
+            _send_sms(sender, "Provide macros, e.g. k=190 p=42 c=0 f=1"); return
+        _put_override(alias, macros)
+        _send_sms(sender, f"Saved custom food: {alias} → {macros['calories']} kcal, P{macros['protein']} C{macros['carbs']} F{macros['fat']}")
+        return
+
+    _send_sms(sender, "Usage: /food set <alias> k=.. p=.. c=.. f=.. | /food del <alias> | /food list")
 
 def _handle_week(sender: str):
     today = datetime.now(TZ).date()
@@ -563,25 +692,70 @@ def _handle_lookup(sender: str, dt: str, text_after_lookup: str):
     _send_sms(sender, "\n".join(lines))
 
 def _handle_meal(sender: str, dt: str, ts_ms: int, meal_pk: str, text: str, simulate: bool = False):
+    """
+    Logs a meal. If the meal text contains a saved override alias (e.g., 'canned tuna' or '2x canned tuna'),
+    use those macros; otherwise call Nutritionix. In /test (simulate) mode we don't write to Dynamo.
+    """
     channel = _channel(sender)
+
+    # --- 1) Try custom food override first ---
+    alias, qty = _match_override_in_text(text)  # requires helpers added earlier
+    if alias:
+        macros = _macros_from_override(alias, qty)  # returns dict with calories/protein/carbs/fat
+        if not macros:
+            # Shouldn't happen, but fall back gracefully to Nutritionix
+            macros, _ = _nutritionix(text)
+        else:
+            if simulate or DRY_RUN:
+                today = _get_totals_for_day(dt)
+                hypo_cal = int(today.get("calories", 0)) + macros["calories"]
+                hypo_pro = int(today.get("protein", 0))  + macros["protein"]
+                _send_sms(
+                    sender,
+                    f"[TEST] Would save meal (override {alias} x{qty}): "
+                    f"{macros['calories']} kcal ({macros['protein']} P / {macros['carbs']} C / {macros['fat']} F).\n"
+                    f"Totals would become: {hypo_cal} / {CALORIES_MAX} kcal, {hypo_pro} / {PROTEIN_MIN} P."
+                )
+                return
+
+            # Persist using the override macros
+            _write_enriched_event(
+                meal_pk=meal_pk, ts_ms=ts_ms, dt=dt, text=f"[override] {text}",
+                macros=macros, channel=channel
+            )
+            created, meal_id = _put_meal_row_idempotent(
+                USER_ID, dt, ts_ms, sender, text, macros, channel
+            )
+            if not created:
+                log.info("Idempotent meal write skipped (override).")
+            new_totals = _update_totals(dt, macros)
+            if sender:
+                _send_sms(sender, _format_meal_reply(macros, new_totals))
+            return
+
+    # --- 2) No override matched → use Nutritionix ---
     macros, items = _nutritionix(text)
 
     if simulate or DRY_RUN:
-        # show what WOULD happen (no DB writes)
         today = _get_totals_for_day(dt)
         hypo_cal = int(today.get("calories", 0)) + macros["calories"]
         hypo_pro = int(today.get("protein", 0))  + macros["protein"]
-        msg = (f"[TEST] Would save meal: {macros['calories']} kcal "
-               f"({macros['protein']} P / {macros['carbs']} C / {macros['fat']} F).\n"
-               f"Totals would become: {hypo_cal} / {CALORIES_MAX} kcal, {hypo_pro} / {PROTEIN_MIN} P.")
-        _send_sms(sender, msg)
+        _send_sms(
+            sender,
+            f"[TEST] Would save meal: {macros['calories']} kcal "
+            f"({macros['protein']} P / {macros['carbs']} C / {macros['fat']} F).\n"
+            f"Totals would become: {hypo_cal} / {CALORIES_MAX} kcal, {hypo_pro} / {PROTEIN_MIN} P."
+        )
         return
 
     _write_enriched_event(meal_pk=meal_pk, ts_ms=ts_ms, dt=dt, text=text, macros=macros, channel=channel)
     created, meal_id = _put_meal_row_idempotent(USER_ID, dt, ts_ms, sender, text, macros, channel)
-    if not created: log.info("Idempotent meal write skipped.")
+    if not created:
+        log.info("Idempotent meal write skipped.")
     new_totals = _update_totals(dt, macros)
-    if sender: _send_sms(sender, _format_meal_reply(macros, new_totals))
+    if sender:
+        _send_sms(sender, _format_meal_reply(macros, new_totals))
+
 
 def _handle_undo(sender: str, dt: str, simulate: bool = False):
     resp = meals_tbl.query(KeyConditionExpression=Key("pk").eq(USER_ID) & Key("sk").begins_with(f"{dt}#"))
@@ -725,6 +899,10 @@ def lambda_handler(event, context):
             _handle_help(sender)
         elif lower.startswith("/summary"):
             _handle_summary(sender, dt)
+        elif lower.startswith("/barcode"):
+            _handle_barcode(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "")
+        elif lower.startswith("/food"):
+            _handle_food(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "")
         elif lower == "/week":
             _handle_week(sender)
         elif lower == "/month":
