@@ -72,28 +72,35 @@ def _med_limits_for(cat_key: str) -> int | None:
         "normal pain med": PAIN_LIMIT_DPM,
     }.get(cat_key)
 
-def _count_med_days_this_month(cat_key: str) -> tuple[int, set]:
-    """Return (# distinct days used in month, set of 'YYYY-MM-DD') for this category."""
+def _count_med_days_this_month(cat_key: str) -> tuple[int, set[str]]:
+    """
+    Count distinct YYYY-MM-DD days this month where meds of category cat_key were used.
+    Uses the gsi_dt (hash: dt) and loops per day (cheap at your scale).
+    """
     start, end = _month_bounds_est()
-    # Query month by dt GSI; we may need to pull across many days, but dev volume is small.
-    resp = meds_tbl.query(
-        IndexName="gsi_dt",
-        KeyConditionExpression=Key("dt").between(start.isoformat(), end.isoformat()) & Key("sk").begins_with(start.isoformat()[:0])
-    )
-    # The gsi_dt uses hash=dt, range=sk; we'll need to page across days:
-    # Simpler approach: scan-by-day loop
-    days = set()
+    days: set[str] = set()
     d = start
     while d <= end:
-        r = meds_tbl.query(
+        q = meds_tbl.query(
             IndexName="gsi_dt",
             KeyConditionExpression=Key("dt").eq(d.isoformat())
         )
-        for it in r.get("Items", []):
-            if _med_category_key(it.get("category","")) == cat_key:
+        for it in q.get("Items", []):
+            if _med_category_key(it.get("category", "")) == cat_key:
                 days.add(d.isoformat())
+        # paginate if needed
+        while "LastEvaluatedKey" in q:
+            q = meds_tbl.query(
+                IndexName="gsi_dt",
+                KeyConditionExpression=Key("dt").eq(d.isoformat()),
+                ExclusiveStartKey=q["LastEvaluatedKey"],
+            )
+            for it in q.get("Items", []):
+                if _med_category_key(it.get("category", "")) == cat_key:
+                    days.add(d.isoformat())
         d += timedelta(days=1)
     return len(days), days
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -465,18 +472,29 @@ def _log_med(sender: str, when_ms: int, text_after: str):
         )
         link_msg = " (linked to current migraine)"
 
-        # --- 24h interaction safety checks ---
+    # --- 24h interaction safety checks ---
     warnings = []
-    # Fetch meds in last 24h (today + yesterday via dt index)
     window_start_ms = when_ms - 24*60*60*1000
     dates_to_check = {_today_est_from_ts(when_ms), _today_est_from_ts(window_start_ms)}
-    recent = []
+    recent: list[dict] = []
     for dtx in dates_to_check:
-        r = meds_tbl.query(IndexName="gsi_dt", KeyConditionExpression=Key("dt").eq(dtx))
-        recent.extend(r.get("Items", []))
+        q = meds_tbl.query(IndexName="gsi_dt", KeyConditionExpression=Key("dt").eq(dtx))
+        recent.extend(q.get("Items", []))
+        while "LastEvaluatedKey" in q:
+            q = meds_tbl.query(
+                IndexName="gsi_dt",
+                KeyConditionExpression=Key("dt").eq(dtx),
+                ExclusiveStartKey=q["LastEvaluatedKey"],
+            )
+            recent.extend(q.get("Items", []))
 
     # Normalize for checks
-    recent_cats = [( _med_category_key(it.get("category","")), int(it.get("ts_ms", 0)) ) for it in recent]
+    recent_cats = [
+        (_med_category_key(it.get("category","")), int(it.get("ts_ms", 0)))
+        for it in recent
+        if abs(when_ms - int(it.get("ts_ms", 0))) < 24*60*60*1000
+    ]
+
     if cat == "triptan":
         # triptan within 24h of DHE or another triptan -> warn (label)
         if any(rc in ("dhe","triptan") and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
@@ -634,20 +652,17 @@ def _handle_migraine(sender: str, args: str, simulate: bool = False):
         _send_sms(sender, "Use `/migraine start ...` or `/migraine end ...`")
 
 def _handle_meds(sender: str):
-    start, end = _month_bounds_est()
     cats = ["triptan","dhe","excedrin","normal pain med","other"]
-    rows = []
+    lines = ["This month (med days used):"]
     for ck in cats:
         used, _ = _count_med_days_this_month(ck)
         lim = _med_limits_for(ck)
-        rows.append((ck, used, lim))
-    lines = ["This month (med days used):"]
-    for ck, used, lim in rows:
         if lim:
             lines.append(f"• {ck}: {used} / {lim} days")
         else:
             lines.append(f"• {ck}: {used} days")
     _send_sms(sender, "\n".join(lines))
+
 
 def _handle_med(sender: str, args: str, simulate: bool = False):
     """

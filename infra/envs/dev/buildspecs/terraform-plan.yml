@@ -34,6 +34,7 @@ phases:
       - rm -f lambda_ingest.zip lambda_meal_enricher.zip
       - zip -j lambda_ingest.zip       lambda/ingest.py
       - zip -j lambda_meal_enricher.zip lambda/meal_enricher.py
+      - zip -j lambda_stats_api.zip      lambda/stats_api.py
 
       # terraform init
       - terraform init -input=false
