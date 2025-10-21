@@ -452,13 +452,16 @@ def _log_med(sender: str, when_ms: int, text_after: str):
     # try to extract dose if present
     dose_match = re.search(r"(\d+\.?\d*)\s*(mg|mcg|g|ml)", text_after.lower())
     dose = dose_match.group(0) if dose_match else ""
-    cat, matched_name = _classify_med(text_after)
+    raw_cat, matched_name = _classify_med(text_after)
+    cat_key = _med_category_key(raw_cat)  # normalize once ("DHE" -> "dhe", etc.)
+
     dt = _today_est_from_ts(when_ms)
     sk = f"{dt}#{when_ms}"
     item = {
         "pk": USER_ID, "sk": sk, "dt": dt,
         "ts_ms": _as_decimal(when_ms), "text": text_after.strip(),
-        "category": cat, "matched_name": matched_name, "dose": dose
+        "category": cat_key,                # <-- store normalized category
+        "matched_name": matched_name, "dose": dose
     }
     meds_tbl.put_item(Item=item)
     # Link to open migraine if present (soft link, by episode_id)
@@ -495,13 +498,14 @@ def _log_med(sender: str, when_ms: int, text_after: str):
         if abs(when_ms - int(it.get("ts_ms", 0))) < 24*60*60*1000
     ]
 
-    if cat == "triptan":
-        # triptan within 24h of DHE or another triptan -> warn (label)
+    if cat_key == "triptan":
         if any(rc in ("dhe","triptan") and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
             warnings.append("⚠️ Triptans should NOT be used within 24h of any triptan or DHE.")
-    if cat == "dhe":
-        if any(rc in ("triptan",) and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
+
+    if cat_key == "dhe":
+        if any(rc == "triptan" and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
             warnings.append("⚠️ DHE should NOT be used within 24h of any triptan.")
+
 
     # --- monthly limit checks (days used) ---
     cat_key = _med_category_key(cat)
@@ -522,7 +526,7 @@ def _log_med(sender: str, when_ms: int, text_after: str):
         summary_note = f"{cat_key.capitalize()} this month: {used_days}/{limit} days."
     msg_tail = f"{' '.join(warnings)}".strip()
 
-    _send_sms(sender, f"Logged med: {cat}{' ' + dose if dose else ''}{link_msg}. {summary_note}" + (f" {msg_tail}" if msg_tail else ""))
+    _send_sms(sender, f"Logged med: {cat_key}{' ' + dose if dose else ''}{link_msg}. {summary_note}" + (f" {msg_tail}" if msg_tail else ""))
 
 # ---------- commands ----------
 def _handle_help(sender: str):
@@ -537,8 +541,10 @@ def _handle_help(sender: str):
         "• /reset today      – zero today’s totals\n"
         "• /migraine start [when] [category] [note]\n"
         "• /migraine end [when] [note]\n"
-        "• /med <name/dose/when>  – log medication"
+        "• /med <name/dose/when>  – log medication\n"
+        "• /meds             – month meds usage vs limits"
     )
+
 
 def _handle_summary(sender: str, dt: str):
     _send_sms(sender, _format_summary_lines(_get_totals_for_day(dt)))
