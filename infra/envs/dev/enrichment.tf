@@ -68,12 +68,12 @@ resource "aws_dynamodb_table" "hb_daily_totals_dev" {
 # LOOKUPS FOR EXISTING RESOURCES
 ############################
 
-# Ingest created this SNS topic already
+# SNS created in ingest.tf
 data "aws_sns_topic" "hb_meal_events_dev" {
   name = "hb_meal_events_dev"
 }
 
-# Ingest created this table already
+# Events table created in ingest.tf
 data "aws_dynamodb_table" "hb_events_dev" {
   name = "hb_events_dev"
 }
@@ -82,7 +82,7 @@ data "aws_dynamodb_table" "hb_events_dev" {
 # IAM (ROLE + POLICY)
 ############################
 
-# Reuse the assume-role doc declared in ingest.tf
+# Reuse the assume-role policy declared in ingest.tf
 # data.aws_iam_policy_document.lambda_assume
 
 resource "aws_iam_role" "hb_meal_enricher_dev" {
@@ -95,13 +95,11 @@ resource "aws_iam_role" "hb_meal_enricher_dev" {
   }
 }
 
-# Basic execution (logs)
 resource "aws_iam_role_policy_attachment" "hb_meal_enricher_logs" {
   role       = aws_iam_role.hb_meal_enricher_dev.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# DDB + Secrets access
 data "aws_iam_policy_document" "meal_enricher_access" {
   statement {
     sid     = "MealsRW"
@@ -124,7 +122,7 @@ data "aws_iam_policy_document" "meal_enricher_access" {
   statement {
     sid     = "SecretsRead"
     actions = ["secretsmanager:GetSecretValue"]
-    resources = ["*"] # optionally restrict to your two secret ARNs
+    resources = ["*"]
   }
 }
 
@@ -139,22 +137,20 @@ resource "aws_iam_role_policy_attachment" "meal_enricher_access_attach" {
 }
 
 ############################
-# LAMBDA (zip produced by CodeBuild at infra/envs/dev)
+# LAMBDA (zip produced at infra/envs/dev by your buildspec)
 ############################
 
 resource "aws_lambda_function" "hb_meal_enricher_dev" {
-  function_name = "hb_meal_enricher_dev"
-  role          = aws_iam_role.hb_meal_enricher_dev.arn
-  handler       = "meal_enricher.lambda_handler"
-
+  function_name    = "hb_meal_enricher_dev"
+  role             = aws_iam_role.hb_meal_enricher_dev.arn
+  handler          = "meal_enricher.lambda_handler"
   runtime          = "python3.12"
-  architectures    = ["x86_64"] # your layer is built on linux/amd64
+  architectures    = ["x86_64"] # matches the CodeBuild layer arch
   filename         = "${path.module}/lambda_meal_enricher.zip"
   source_code_hash = filebase64sha256("${path.module}/lambda_meal_enricher.zip")
-
-  publish     = true
-  timeout     = 30
-  memory_size = 512
+  publish          = true
+  timeout          = 30
+  memory_size      = 512
 
   environment {
     variables = {
@@ -196,7 +192,7 @@ resource "aws_sns_topic_subscription" "meal_events_to_enricher" {
   endpoint  = aws_lambda_function.hb_meal_enricher_dev.arn
 }
 
-# Optional: export the enricher ARN from here (so ingest.tf doesn't guess it)
+# Optional: export the enricher ARN
 output "meal_enricher_arn" {
   value = aws_lambda_function.hb_meal_enricher_dev.arn
 }

@@ -38,10 +38,25 @@ resource "aws_dynamodb_table" "events" {
   hash_key  = "pk" # user id or "me"
   range_key = "sk" # ISO8601 timestamp
 
-  attribute { name = "pk";   type = "S" }
-  attribute { name = "sk";   type = "S" }
-  attribute { name = "dt";   type = "S" }
-  attribute { name = "type"; type = "S" }
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  attribute {
+    name = "dt"
+    type = "S"
+  }
+
+  attribute {
+    name = "type"
+    type = "S"
+  }
 
   global_secondary_index {
     name            = "gsi_dt"
@@ -56,7 +71,7 @@ resource "aws_dynamodb_table" "events" {
   }
 }
 
-# --- NEW: SNS TOPIC used for meal events ---
+# --- SNS TOPIC used for meal events ---
 resource "aws_sns_topic" "meal_events" {
   name = "hb_meal_events_${local.env}"
   tags = {
@@ -65,8 +80,8 @@ resource "aws_sns_topic" "meal_events" {
   }
 }
 
-# --- NEW: Secrets Manager data source (Nutritionix) ---
-# If the secret already exists out-of-band, reference it by name here.
+# --- Secrets Manager lookup (Nutritionix) ---
+# Use data source because the secret already exists out-of-band.
 data "aws_secretsmanager_secret" "nutrition_api_key" {
   name = "hb_nutrition_api_key_dev"
 }
