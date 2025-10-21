@@ -305,7 +305,7 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
       TWILIO_SECRET_NAME    = "hb_twilio_dev"
 
       CALORIES_MAX = "1800"
-      PROTEIN_MIN  = "210"
+      PROTEIN_MIN  = "190"
     }
   }
 

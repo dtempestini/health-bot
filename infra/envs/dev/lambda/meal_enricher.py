@@ -38,7 +38,7 @@ TWILIO_SECRET_NAME    = os.environ.get("TWILIO_SECRET_NAME", "hb_twilio_dev")
 
 # Goals
 CALORIES_MAX = int(os.environ.get("CALORIES_MAX", "1800"))
-PROTEIN_MIN  = int(os.environ.get("PROTEIN_MIN",  "210"))
+PROTEIN_MIN  = int(os.environ.get("PROTEIN_MIN",  "190"))
 
 meals_tbl   = ddb.Table(MEALS_TABLE)
 totals_tbl  = ddb.Table(TOTALS_TABLE)

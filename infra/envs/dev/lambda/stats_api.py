@@ -14,7 +14,7 @@ MIGS_TABLE   = os.environ["MIGRAINES_TABLE"]
 MEDS_TABLE   = os.environ["MEDS_TABLE"]
 
 CALORIES_MAX = int(os.environ.get("CALORIES_MAX", "1800"))
-PROTEIN_MIN  = int(os.environ.get("PROTEIN_MIN",  "210"))
+PROTEIN_MIN  = int(os.environ.get("PROTEIN_MIN",  "190"))
 
 ddb        = boto3.resource("dynamodb")
 meals_tbl  = ddb.Table(MEALS_TABLE)

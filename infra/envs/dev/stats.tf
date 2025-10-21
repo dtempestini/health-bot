@@ -79,7 +79,7 @@ resource "aws_lambda_function" "stats" {
       MIGRAINES_TABLE = aws_dynamodb_table.hb_migraines_dev.name
       MEDS_TABLE      = aws_dynamodb_table.hb_meds_dev.name
       CALORIES_MAX    = "1800"
-      PROTEIN_MIN     = "210"
+      PROTEIN_MIN     = "190"
     }
   }
 
