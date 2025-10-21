@@ -2,6 +2,7 @@
 import os, json, boto3, time, math
 import urllib.parse
 import requests  # already included in your layer/container; if not, vendor in zip
+from twilio.rest import Client
 
 secrets = boto3.client("secretsmanager")
 ddb = boto3.resource("dynamodb")
