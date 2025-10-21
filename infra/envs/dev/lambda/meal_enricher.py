@@ -20,6 +20,13 @@ TOTALS_TABLE  = os.environ["TOTALS_TABLE"]       # hb_daily_totals_dev
 EVENTS_TABLE  = os.environ["EVENTS_TABLE"]       # hb_events_dev
 USER_ID       = os.environ.get("USER_ID", "me")
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
+# Medication safety limits (env overrideable)
+TRIPTAN_LIMIT_DPM = int(os.environ.get("TRIPTAN_LIMIT_DPM", "8"))   # days per month
+DHE_LIMIT_DPM     = int(os.environ.get("DHE_LIMIT_DPM", "6"))
+COMBO_LIMIT_DPM   = int(os.environ.get("COMBO_LIMIT_DPM", "8"))     # e.g., Excedrin
+PAIN_LIMIT_DPM    = int(os.environ.get("PAIN_LIMIT_DPM", "12"))     # simple analgesics/NSAIDs
+NEAR_THRESH_PCT   = float(os.environ.get("NEAR_THRESH_PCT", "0.75"))
+
 
 
 # NEW tables
@@ -42,6 +49,52 @@ meds_tbl    = ddb.Table(MEDS_TABLE)
 TZ = ZoneInfo("America/New_York")
 
 # ---------- helpers ----------
+def _month_bounds_est(ts_ms: int | None = None):
+    now = datetime.now(TZ) if ts_ms is None else datetime.fromtimestamp(ts_ms/1000, TZ)
+    start = now.replace(day=1).date()
+    end = now.date()
+    return start, end
+
+def _med_category_key(cat: str) -> str:
+    c = cat.lower()
+    if c in ("triptan",): return "triptan"
+    if c in ("dhe","d.h.e.","d.h.e"): return "dhe"
+    if c in ("excedrin",): return "excedrin"
+    if c in ("normal pain med","nsaid","ibuprofen","naproxen","acetaminophen","tylenol","advil","aleve"):
+        return "normal pain med"
+    return c
+
+def _med_limits_for(cat_key: str) -> int | None:
+    return {
+        "triptan": TRIPTAN_LIMIT_DPM,
+        "dhe": DHE_LIMIT_DPM,
+        "excedrin": COMBO_LIMIT_DPM,
+        "normal pain med": PAIN_LIMIT_DPM,
+    }.get(cat_key)
+
+def _count_med_days_this_month(cat_key: str) -> tuple[int, set]:
+    """Return (# distinct days used in month, set of 'YYYY-MM-DD') for this category."""
+    start, end = _month_bounds_est()
+    # Query month by dt GSI; we may need to pull across many days, but dev volume is small.
+    resp = meds_tbl.query(
+        IndexName="gsi_dt",
+        KeyConditionExpression=Key("dt").between(start.isoformat(), end.isoformat()) & Key("sk").begins_with(start.isoformat()[:0])
+    )
+    # The gsi_dt uses hash=dt, range=sk; we'll need to page across days:
+    # Simpler approach: scan-by-day loop
+    days = set()
+    d = start
+    while d <= end:
+        r = meds_tbl.query(
+            IndexName="gsi_dt",
+            KeyConditionExpression=Key("dt").eq(d.isoformat())
+        )
+        for it in r.get("Items", []):
+            if _med_category_key(it.get("category","")) == cat_key:
+                days.add(d.isoformat())
+        d += timedelta(days=1)
+    return len(days), days
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -411,7 +464,47 @@ def _log_med(sender: str, when_ms: int, text_after: str):
             ExpressionAttributeValues={":z": [], ":m": [item]}
         )
         link_msg = " (linked to current migraine)"
-    _send_sms(sender, f"Logged med: {cat}{' ' + dose if dose else ''}{link_msg}.")
+
+        # --- 24h interaction safety checks ---
+    warnings = []
+    # Fetch meds in last 24h (today + yesterday via dt index)
+    window_start_ms = when_ms - 24*60*60*1000
+    dates_to_check = {_today_est_from_ts(when_ms), _today_est_from_ts(window_start_ms)}
+    recent = []
+    for dtx in dates_to_check:
+        r = meds_tbl.query(IndexName="gsi_dt", KeyConditionExpression=Key("dt").eq(dtx))
+        recent.extend(r.get("Items", []))
+
+    # Normalize for checks
+    recent_cats = [( _med_category_key(it.get("category","")), int(it.get("ts_ms", 0)) ) for it in recent]
+    if cat == "triptan":
+        # triptan within 24h of DHE or another triptan -> warn (label)
+        if any(rc in ("dhe","triptan") and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
+            warnings.append("⚠️ Triptans should NOT be used within 24h of any triptan or DHE.")
+    if cat == "dhe":
+        if any(rc in ("triptan",) and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
+            warnings.append("⚠️ DHE should NOT be used within 24h of any triptan.")
+
+    # --- monthly limit checks (days used) ---
+    cat_key = _med_category_key(cat)
+    limit = _med_limits_for(cat_key)
+    if limit:
+        used_days, day_set = _count_med_days_this_month(cat_key)
+        # If we haven't already counted today's day and this isn't simulate, include it in 'would-be' count
+        would_be = used_days if dt in day_set else used_days + 1
+        pct = 0 if limit == 0 else round(would_be/limit, 2)
+        if would_be > limit:
+            warnings.append(f"⚠️ Over monthly {cat_key} limit: {would_be}/{limit} days.")
+        elif pct >= NEAR_THRESH_PCT:
+            warnings.append(f"⚠️ Approaching monthly {cat_key} limit: {would_be}/{limit} days.")
+
+    # Tailor reply
+    summary_note = ""
+    if limit:
+        summary_note = f"{cat_key.capitalize()} this month: {used_days}/{limit} days."
+    msg_tail = f"{' '.join(warnings)}".strip()
+
+    _send_sms(sender, f"Logged med: {cat}{' ' + dose if dose else ''}{link_msg}. {summary_note}" + (f" {msg_tail}" if msg_tail else ""))
 
 # ---------- commands ----------
 def _handle_help(sender: str):
@@ -540,6 +633,22 @@ def _handle_migraine(sender: str, args: str, simulate: bool = False):
     else:
         _send_sms(sender, "Use `/migraine start ...` or `/migraine end ...`")
 
+def _handle_meds(sender: str):
+    start, end = _month_bounds_est()
+    cats = ["triptan","dhe","excedrin","normal pain med","other"]
+    rows = []
+    for ck in cats:
+        used, _ = _count_med_days_this_month(ck)
+        lim = _med_limits_for(ck)
+        rows.append((ck, used, lim))
+    lines = ["This month (med days used):"]
+    for ck, used, lim in rows:
+        if lim:
+            lines.append(f"• {ck}: {used} / {lim} days")
+        else:
+            lines.append(f"• {ck}: {used} days")
+    _send_sms(sender, "\n".join(lines))
+
 def _handle_med(sender: str, args: str, simulate: bool = False):
     """
     /med <free text>  (we’ll parse dose & time roughly)
@@ -613,6 +722,9 @@ def lambda_handler(event, context):
         elif lower.startswith("meal:") or lower.startswith("meal "):
             meal_text = raw_text.split(":", 1)[1].strip() if ":" in raw_text else raw_text.split(" ", 1)[1].strip()
             _handle_meal(sender, dt, ts_ms, meal_pk, meal_text, simulate=simulate) if meal_text else _send_sms(sender, "Try: meal: greek yogurt + berries")  # <<< add simulate
+        elif lower == "/meds":
+            _handle_meds(sender)
+
 
         else:
             _send_sms(sender, "Unrecognized. Send `meal: ...`, `/summary`, `/week`, `/month`, `/lookup: ...`, `/undo`, `/reset today`, `/migraine ...`, `/med ...`, or `/help`")
