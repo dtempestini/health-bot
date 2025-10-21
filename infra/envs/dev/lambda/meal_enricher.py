@@ -63,24 +63,52 @@ def _get_twilio():
     }
 
 def _send_sms(to_number: str, body: str):
-    # read creds + base "from" (usually "+1...") from Secrets
+    # Load Twilio creds/config from Secrets Manager
     sec = secrets.get_secret_value(SecretId=TWILIO_SECRET_NAME)
     cfg = json.loads(sec["SecretString"])
+
     account_sid = cfg["account_sid"]
     auth_token  = cfg["auth_token"]
-    from_number = cfg["from"]  # keep as plain +1... in Secrets
 
-    # --- Normalize channel so From/To match (SMS vs WhatsApp) ---
-    if to_number.startswith("whatsapp:"):
-        # Wrap the from_number with the same channel prefix
+    from_number = (
+        cfg.get("from")
+        or cfg.get("from_number")
+        or cfg.get("twilio_from")
+    )
+    messaging_service_sid = cfg.get("messaging_service_sid")
+
+    # Normalize channel
+    to_number = to_number.strip()
+    is_whatsapp = to_number.startswith("whatsapp:")
+
+    if is_whatsapp:
+        if not from_number:
+            raise RuntimeError("Missing 'from' number in secret for WhatsApp sends.")
         from_number = "whatsapp:" + from_number.lstrip("+")
-        to_number   = "whatsapp:" + to_number.lstrip("+")
+        to_number   = "whatsapp:" + to_number.replace("whatsapp:", "").lstrip("+")
+    else:
+        if from_number and not from_number.startswith("+"):
+            from_number = "+" + from_number
+        if not to_number.startswith("+"):
+            to_number = "+" + to_number
 
-    client = Client(account_sid, auth_token)
+    # Build payload
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
+    data = {"To": to_number, "Body": body}
+    if is_whatsapp or not messaging_service_sid:
+        if not from_number:
+            raise RuntimeError("No 'from' number found in secret (keys tried: 'from', 'from_number', 'twilio_from').")
+        data["From"] = from_number
+    else:
+        data["MessagingServiceSid"] = messaging_service_sid
+
     try:
-        client.messages.create(from_=from_number, to=to_number, body=body)
+        resp = requests.post(url, data=data, auth=(account_sid, auth_token), timeout=10)
+        if resp.status_code >= 300:
+            print(f"Twilio send failed {resp.status_code}: {resp.text}")
     except Exception as e:
-        print(f"Twilio send failed 400: {e}")
+        print(f"Twilio send failed: {e}")
+
 
 
 # ---------- handler ----------
