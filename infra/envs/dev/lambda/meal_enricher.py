@@ -19,6 +19,8 @@ MEALS_TABLE   = os.environ["MEALS_TABLE"]        # hb_meals_dev
 TOTALS_TABLE  = os.environ["TOTALS_TABLE"]       # hb_daily_totals_dev
 EVENTS_TABLE  = os.environ["EVENTS_TABLE"]       # hb_events_dev
 USER_ID       = os.environ.get("USER_ID", "me")
+DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
+
 
 # NEW tables
 MIGRAINES_TABLE = os.environ.get("MIGRAINES_TABLE", "hb_migraines_dev")
@@ -443,16 +445,28 @@ def _handle_lookup(sender: str, dt: str, text_after_lookup: str):
     if hypo_pro < PROTEIN_MIN:  lines.append(f"💪 You’d still need {PROTEIN_MIN - hypo_pro} g protein today.")
     _send_sms(sender, "\n".join(lines))
 
-def _handle_meal(sender: str, dt: str, ts_ms: int, meal_pk: str, text: str):
+def _handle_meal(sender: str, dt: str, ts_ms: int, meal_pk: str, text: str, simulate: bool = False):
     channel = _channel(sender)
     macros, items = _nutritionix(text)
+
+    if simulate or DRY_RUN:
+        # show what WOULD happen (no DB writes)
+        today = _get_totals_for_day(dt)
+        hypo_cal = int(today.get("calories", 0)) + macros["calories"]
+        hypo_pro = int(today.get("protein", 0))  + macros["protein"]
+        msg = (f"[TEST] Would save meal: {macros['calories']} kcal "
+               f"({macros['protein']} P / {macros['carbs']} C / {macros['fat']} F).\n"
+               f"Totals would become: {hypo_cal} / {CALORIES_MAX} kcal, {hypo_pro} / {PROTEIN_MIN} P.")
+        _send_sms(sender, msg)
+        return
+
     _write_enriched_event(meal_pk=meal_pk, ts_ms=ts_ms, dt=dt, text=text, macros=macros, channel=channel)
     created, meal_id = _put_meal_row_idempotent(USER_ID, dt, ts_ms, sender, text, macros, channel)
     if not created: log.info("Idempotent meal write skipped.")
     new_totals = _update_totals(dt, macros)
     if sender: _send_sms(sender, _format_meal_reply(macros, new_totals))
 
-def _handle_undo(sender: str, dt: str):
+def _handle_undo(sender: str, dt: str, simulate: bool = False):
     resp = meals_tbl.query(KeyConditionExpression=Key("pk").eq(USER_ID) & Key("sk").begins_with(f"{dt}#"))
     items = resp.get("Items", [])
     if not items:
@@ -460,13 +474,19 @@ def _handle_undo(sender: str, dt: str):
     latest = max(items, key=lambda it: int(it.get("created_ms", 0)))
     macros = {"calories": int(latest.get("kcal", 0)), "protein": int(latest.get("protein_g", 0)),
               "carbs": int(latest.get("carbs_g", 0)), "fat": int(latest.get("fat_g", 0))}
+    if simulate or DRY_RUN:
+        _send_sms(sender, f"[TEST] Would undo last meal: -{macros['calories']} kcal, -{macros['protein']} P.")
+        return
     _decrement_totals(dt, macros)
     meals_tbl.delete_item(Key={"pk": latest["pk"], "sk": latest["sk"]})
     events_tbl.put_item(Item={"pk": USER_ID, "sk": str(_now_ms()), "type": "meal.undo", "dt": dt,
                               "ref": latest.get("meal_id"), "kcal": _as_decimal(macros["calories"])})
     _send_sms(sender, f"Undid last meal: -{macros['calories']} kcal, -{macros['protein']} P.")
 
-def _handle_reset_today(sender: str, dt: str):
+def _handle_reset_today(sender: str, dt: str, simulate: bool = False):
+    if simulate or DRY_RUN:
+        _send_sms(sender, "[TEST] Would reset today’s totals to 0 (meals remain).")
+        return
     key = {"pk": f"total#{USER_ID}", "sk": dt}
     totals_tbl.update_item(Key=key,
         UpdateExpression="SET calories=:z, protein=:z, carbs=:z, fat=:z, last_update_ms=:now",
@@ -474,7 +494,7 @@ def _handle_reset_today(sender: str, dt: str):
     events_tbl.put_item(Item={"pk": USER_ID, "sk": str(_now_ms()), "type": "totals.reset", "dt": dt})
     _send_sms(sender, "Today’s totals have been reset to 0. (Meals remain.)")
 
-def _handle_migraine(sender: str, args: str):
+def _handle_migraine(sender: str, args: str, simulate: bool = False):
     """
     /migraine start [when] [category] [note...]
     /migraine end [when] [note...]
@@ -499,19 +519,28 @@ def _handle_migraine(sender: str, args: str):
         if not when_tokens and not note_tokens and len(parts) > 1:
             # maybe only time or note given
             when_tokens = parts[1:]
+
         when_ms = _parse_when_to_ms(when_tokens)
         note = " ".join(note_tokens) if note_tokens else ""
+        if simulate or DRY_RUN:
+            tdisp = datetime.fromtimestamp(when_ms/1000, TZ).strftime('%-I:%M %p %Z')
+            _send_sms(sender, f"[TEST] Would start migraine ({cat}) at {tdisp}. Note: {note or '(none)'}")
+            return
         _start_migraine(sender, when_ms, cat, note)
 
     elif sub == "end":
         when_tokens = parts[1:]
         when_ms = _parse_when_to_ms(when_tokens)
         note = " ".join([t for t in when_tokens if t not in ("now","today","yesterday")])
+        if simulate or DRY_RUN:
+            tdisp = datetime.fromtimestamp(when_ms/1000, TZ).strftime('%-I:%M %p %Z')
+            _send_sms(sender, f"[TEST] Would end migraine at {tdisp}. Note: {note or '(none)'}")
+            return
         _end_migraine(sender, when_ms, note)
     else:
         _send_sms(sender, "Use `/migraine start ...` or `/migraine end ...`")
 
-def _handle_med(sender: str, args: str):
+def _handle_med(sender: str, args: str, simulate: bool = False):
     """
     /med <free text>  (we’ll parse dose & time roughly)
     Examples:
@@ -538,6 +567,11 @@ def _handle_med(sender: str, args: str):
     text_after = " ".join(text_tokens).strip()
     if not text_after:
         _send_sms(sender, "Usage: /med <name/dose/when>"); return
+    
+    if simulate or DRY_RUN:
+        _send_sms(sender, f"[TEST] Would log med: {text_after} at {datetime.fromtimestamp(when_ms/1000, TZ).strftime('%-I:%M %p %Z')}")
+        return
+
     _log_med(sender, when_ms, text_after)
 
 # ---------- handler ----------
@@ -547,6 +581,11 @@ def lambda_handler(event, context):
         raw_text = (msg.get("text") or msg.get("body") or "").strip()
         sender = msg.get("sender") or msg.get("from") or ""
         meal_pk = msg.get("pk") or USER_ID
+        simulate = False
+        if raw_text.lower().startswith("/test "):
+            simulate = True
+            raw_text = raw_text[6:].strip()
+
 
         ts_ms = _parse_ts(msg.get("sk"))
         dt = _today_est_from_ts(ts_ms)  # EST day boundary
@@ -564,16 +603,17 @@ def lambda_handler(event, context):
             q = raw_text.split(":", 1)[1].strip() if ":" in raw_text else raw_text.split(" ", 1)[1].strip()
             _handle_lookup(sender, dt, q) if q else _send_sms(sender, "Usage: /lookup: <meal>")
         elif lower == "/undo":
-            _handle_undo(sender, dt)
+            _handle_undo(sender, dt, simulate=simulate)             # <<< add simulate
         elif lower == "/reset today":
-            _handle_reset_today(sender, dt)
+            _handle_reset_today(sender, dt, simulate=simulate)      # <<< add simulate
         elif lower.startswith("/migraine"):
-            _handle_migraine(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "")
+            _handle_migraine(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)  # <<< add simulate
         elif lower.startswith("/med"):
-            _handle_med(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "")
+            _handle_med(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)       # <<< add simulate
         elif lower.startswith("meal:") or lower.startswith("meal "):
             meal_text = raw_text.split(":", 1)[1].strip() if ":" in raw_text else raw_text.split(" ", 1)[1].strip()
-            _handle_meal(sender, dt, ts_ms, meal_pk, meal_text) if meal_text else _send_sms(sender, "Try: meal: greek yogurt + berries")
+            _handle_meal(sender, dt, ts_ms, meal_pk, meal_text, simulate=simulate) if meal_text else _send_sms(sender, "Try: meal: greek yogurt + berries")  # <<< add simulate
+
         else:
             _send_sms(sender, "Unrecognized. Send `meal: ...`, `/summary`, `/week`, `/month`, `/lookup: ...`, `/undo`, `/reset today`, `/migraine ...`, `/med ...`, or `/help`")
     return {"ok": True}

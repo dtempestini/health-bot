@@ -46,14 +46,14 @@ resource "aws_glue_catalog_table" "events_raw" {
   table_type    = "EXTERNAL_TABLE"
 
   parameters = {
-    "classification"             = "json"
-    "projection.enabled"         = "true"
-    "projection.dt.type"         = "date"
-    "projection.dt.range"        = "2024-01-01,NOW"
-    "projection.dt.format"       = "yyyy-MM-dd"
+    "classification"       = "json"
+    "projection.enabled"   = "true"
+    "projection.dt.type"   = "date"
+    "projection.dt.range"  = "2024-01-01,NOW"
+    "projection.dt.format" = "yyyy-MM-dd"
     # literal ${dt} for Glue: use $${dt} in HCL
-    "storage.location.template"  = "s3://${local.raw_bucket}/events/dt=$${dt}/"
-    "has_encrypted_data"         = "false"
+    "storage.location.template" = "s3://${local.raw_bucket}/events/dt=$${dt}/"
+    "has_encrypted_data"        = "false"
   }
 
 

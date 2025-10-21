@@ -110,14 +110,14 @@ data "aws_iam_policy_document" "ingest_policy" {
   }
 
   statement {
-    sid     = "DDBWriteAndDescribe"
-    actions = ["dynamodb:PutItem", "dynamodb:DescribeTable"]
+    sid       = "DDBWriteAndDescribe"
+    actions   = ["dynamodb:PutItem", "dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.events.arn]
   }
 
   statement {
-    sid     = "SNSPublishMeals"
-    actions = ["sns:Publish"]
+    sid       = "SNSPublishMeals"
+    actions   = ["sns:Publish"]
     resources = [aws_sns_topic.meal_events.arn]
   }
 
@@ -128,8 +128,8 @@ data "aws_iam_policy_document" "ingest_policy" {
   }
 
   statement {
-    sid     = "ReadNutritionSecretForIngest"
-    actions = ["secretsmanager:GetSecretValue"]
+    sid       = "ReadNutritionSecretForIngest"
+    actions   = ["secretsmanager:GetSecretValue"]
     resources = [data.aws_secretsmanager_secret.nutrition_api_key.arn]
   }
 }

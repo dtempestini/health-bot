@@ -67,16 +67,29 @@ resource "aws_dynamodb_table" "hb_daily_totals_dev" {
 ################################
 # NEW: DynamoDB for migraines
 ################################
+# --- replace entire hb_migraines_dev with this ---
 resource "aws_dynamodb_table" "hb_migraines_dev" {
   name         = "hb_migraines_dev"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute { name = "pk"; type = "S" }
-  attribute { name = "sk"; type = "S" }
-  attribute { name = "dt"; type = "S" }     # YYYY-MM-DD for start date
-  attribute { name = "is_open"; type = "N" }# 1 if not ended
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+  attribute {
+    name = "dt"
+    type = "S"
+  } # YYYY-MM-DD for start date
+  attribute {
+    name = "is_open"
+    type = "N"
+  } # 1 if not ended
 
   # Find open episode quickly
   global_secondary_index {
@@ -86,7 +99,7 @@ resource "aws_dynamodb_table" "hb_migraines_dev" {
     projection_type = "ALL"
   }
 
-  # Query by date (e.g., month view)
+  # Query by date (e.g., week/month views)
   global_secondary_index {
     name            = "gsi_dt"
     hash_key        = "dt"
@@ -104,14 +117,15 @@ resource "aws_dynamodb_table" "hb_migraines_dev" {
 }
 
 
+
 ################################
 # NEW: DynamoDB for medications
 ################################
 resource "aws_dynamodb_table" "hb_meds_dev" {
   name         = "hb_meds_dev"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "pk"                 # user id
-  range_key    = "sk"                 # "dt#<ms>"
+  hash_key     = "pk" # user id
+  range_key    = "sk" # "dt#<ms>"
 
   attribute {
     name = "pk"
@@ -184,38 +198,38 @@ resource "aws_iam_role_policy_attachment" "hb_meal_enricher_logs" {
 
 data "aws_iam_policy_document" "meal_enricher_access" {
   statement {
-    sid     = "MealsRW"
-    actions = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DescribeTable"]
+    sid       = "MealsRW"
+    actions   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.hb_meals_dev.arn]
   }
 
   statement {
-    sid     = "TotalsRW"
-    actions = ["dynamodb:UpdateItem","dynamodb:GetItem","dynamodb:DescribeTable"]
+    sid       = "TotalsRW"
+    actions   = ["dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.hb_daily_totals_dev.arn]
   }
 
   statement {
-    sid     = "EventsWrite"
-    actions = ["dynamodb:PutItem"]
+    sid       = "EventsWrite"
+    actions   = ["dynamodb:PutItem"]
     resources = [data.aws_dynamodb_table.hb_events_dev.arn]
   }
 
   statement {
-    sid     = "SecretsRead"
-    actions = ["secretsmanager:GetSecretValue"]
+    sid       = "SecretsRead"
+    actions   = ["secretsmanager:GetSecretValue"]
     resources = ["*"]
   }
 
   statement {
-    sid     = "MigrainesRW"
-    actions = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:UpdateItem","dynamodb:Query","dynamodb:DeleteItem","dynamodb:DescribeTable"]
+    sid       = "MigrainesRW"
+    actions   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:DeleteItem", "dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.hb_migraines_dev.arn]
   }
 
   statement {
-    sid     = "MedsRW"
-    actions = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:Query","dynamodb:DescribeTable"]
+    sid       = "MedsRW"
+    actions   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DescribeTable"]
     resources = [aws_dynamodb_table.hb_meds_dev.arn]
   }
 }
@@ -258,20 +272,20 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
 
   environment {
     variables = {
-      USER_ID               = "me"
+      USER_ID = "me"
 
-      MEALS_TABLE           = aws_dynamodb_table.hb_meals_dev.name
-      TOTALS_TABLE          = aws_dynamodb_table.hb_daily_totals_dev.name
-      EVENTS_TABLE          = data.aws_dynamodb_table.hb_events_dev.name
+      MEALS_TABLE  = aws_dynamodb_table.hb_meals_dev.name
+      TOTALS_TABLE = aws_dynamodb_table.hb_daily_totals_dev.name
+      EVENTS_TABLE = data.aws_dynamodb_table.hb_events_dev.name
 
-      MIGRAINES_TABLE       = aws_dynamodb_table.hb_migraines_dev.name
-      MEDS_TABLE            = aws_dynamodb_table.hb_meds_dev.name
+      MIGRAINES_TABLE = aws_dynamodb_table.hb_migraines_dev.name
+      MEDS_TABLE      = aws_dynamodb_table.hb_meds_dev.name
 
       NUTRITION_SECRET_NAME = "hb_nutrition_api_key_dev"
       TWILIO_SECRET_NAME    = "hb_twilio_dev"
 
-      CALORIES_MAX          = "1800"
-      PROTEIN_MIN           = "210"
+      CALORIES_MAX = "1800"
+      PROTEIN_MIN  = "210"
     }
   }
 
@@ -292,7 +306,7 @@ resource "aws_sns_topic" "ops_alarms_dev" {
 resource "aws_sns_topic_subscription" "ops_email" {
   topic_arn = aws_sns_topic.ops_alarms_dev.arn
   protocol  = "email"
-  endpoint  = var.billing_email   # uses the var declared in main.tf
+  endpoint  = var.billing_email # uses the var declared in main.tf
 }
 
 resource "aws_cloudwatch_metric_alarm" "meal_enricher_errors" {
