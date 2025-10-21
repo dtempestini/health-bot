@@ -140,6 +140,15 @@ resource "aws_iam_role_policy_attachment" "meal_enricher_access_attach" {
 # LAMBDA (zip produced at infra/envs/dev by your buildspec)
 ############################
 
+# Publish the requests layer built by CodeBuild
+resource "aws_lambda_layer_version" "requests" {
+  layer_name               = "requests-layer-dev"
+  filename                 = "${path.module}/lambda/requests-layer.zip"
+  compatible_runtimes      = ["python3.12"]
+  compatible_architectures = ["x86_64"] # keep in sync with your function arch
+  description              = "Requests lib for meal_enricher"
+}
+
 resource "aws_lambda_function" "hb_meal_enricher_dev" {
   function_name    = "hb_meal_enricher_dev"
   role             = aws_iam_role.hb_meal_enricher_dev.arn
@@ -172,6 +181,8 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
     app   = "health-bot"
     stack = "dev"
   }
+
+    layers = [aws_lambda_layer_version.requests.arn]
 }
 
 ############################
