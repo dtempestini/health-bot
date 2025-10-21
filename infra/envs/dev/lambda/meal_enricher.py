@@ -67,61 +67,45 @@ import boto3
 secrets = boto3.client("secretsmanager")
 TWILIO_SECRET_NAME = os.environ.get("TWILIO_SECRET_NAME", "hb_twilio_dev")
 
+import json, os, requests, boto3
+
+secrets = boto3.client("secretsmanager")
+TWILIO_SECRET_NAME = os.environ.get("TWILIO_SECRET_NAME", "hb_twilio_dev")
+
 def _send_sms(to_number: str, body: str) -> None:
     """
-    Send a reply via Twilio. Works for plain SMS (+1...) and WhatsApp (whatsapp:+1...).
-    Secrets JSON may be either:
-      {"account_sid":"AC...","auth_token":"...","from":"+1XXXXXXXXXX"}
-    or (recommended, supports both channels explicitly):
-      {"account_sid":"AC...","auth_token":"...","from_sms":"+1XXXXXXXXXX","from_wa":"whatsapp:+14155238886"}
-    If `from_wa` is omitted, the WhatsApp sandbox number is used by default.
+    Sends WhatsApp (sandbox) or SMS replies via Twilio.
+    Automatically formats 'From' and 'To' correctly for the sandbox.
     """
 
-    # 1) load creds
+    # --- Load credentials ---
     sec = secrets.get_secret_value(SecretId=TWILIO_SECRET_NAME)["SecretString"]
     cfg = json.loads(sec)
 
     account_sid = cfg["account_sid"]
     auth_token  = cfg["auth_token"]
 
-    # allow either "from" or "from_sms"
-    from_sms = cfg.get("from_sms") or cfg.get("from")
-    # default WA From is sandbox number; override with from_wa if you set one
-    from_wa  = cfg.get("from_wa", "whatsapp:+14155238886")
+    # Use WhatsApp sandbox number (required for replies)
+    from_number = cfg.get("from_wa", "whatsapp:+14155238886")
 
-    if not from_sms:
-        print("Twilio send skipped: missing from/from_sms in Secrets.")
-        return
+    # --- Normalize the recipient ---
+    # Always ensure WhatsApp prefix is correct (sandbox requires whatsapp:+)
+    if not to_number.startswith("whatsapp:"):
+        to_number = "whatsapp:" + to_number.lstrip("+")
 
-    # 2) decide channel from the *to_number*
-    n = (to_number or "").strip()
-
-    if n.startswith("whatsapp:"):
-        # WhatsApp: make sure both ends carry the WA prefix
-        from_number = from_wa
-        # normalize recipient to 'whatsapp:+<digits>'
-        n = "whatsapp:" + n.replace("whatsapp:", "").lstrip("+")
-    else:
-        # SMS: both To and From must be plain E.164 like +1...
-        from_number = from_sms
-        # strip accidental 'whatsapp:' if present
-        n = n.replace("whatsapp:", "")
-
-    # 3) fire Twilio REST (no SDK required)
+    # --- Twilio API Request ---
     url  = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
-    data = {"From": from_number, "To": n, "Body": body}
+    data = {"From": from_number, "To": to_number, "Body": body}
 
     try:
         r = requests.post(url, data=data, auth=(account_sid, auth_token), timeout=10)
         if r.status_code >= 400:
-            # surface Twilio error JSON (e.g., 21212, 21910, etc.)
             print(f"Twilio send failed {r.status_code}: {r.text}")
         else:
-            # optionally log the SID
-            sid = r.json().get("sid")
-            print(f"Twilio send OK sid={sid}")
+            print(f"Twilio send OK: {r.json().get('sid')}")
     except Exception as e:
         print(f"Twilio send exception: {e}")
+
 
 
 # ---------- handler ----------
