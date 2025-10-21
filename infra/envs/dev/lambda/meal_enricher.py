@@ -122,6 +122,10 @@ def lambda_handler(event, context):
         # 3) optional SMS reply with macros
         if sender:
             body = f"Logged: {text}\nCalories {macros['calories']}, P {macros['protein']}g, C {macros['carbs']}g, F {macros['fat']}g."
+            if sender.startswith("whatsapp:"):
+                from_number = "whatsapp:" + from_number.lstrip("+")
+                sender = "whatsapp:" + sender.lstrip("+")
+
             _send_sms(sender, body)
 
         print(f"Enrichment stored OK {meal_pk} {ts}")
