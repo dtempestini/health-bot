@@ -16,12 +16,25 @@ resource "aws_dynamodb_table" "hb_food_overrides_dev" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute { name = "pk"; type = "S" }
-  attribute { name = "sk"; type = "S" }
+  attribute {
+    name = "pk"
+    type = "S"
+  }
 
-  point_in_time_recovery { enabled = true }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
 
-  tags = { app = "health-bot", stack = "dev", part = "food_overrides" }
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "food_overrides"
+  }
 }
 
 resource "aws_dynamodb_table" "hb_meals_dev" {
@@ -30,12 +43,25 @@ resource "aws_dynamodb_table" "hb_meals_dev" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute { name = "pk"; type = "S" }
-  attribute { name = "sk"; type = "S" }
+  attribute {
+    name = "pk"
+    type = "S"
+  }
 
-  point_in_time_recovery { enabled = true }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
 
-  tags = { app = "health-bot", stack = "dev", part = "meals" }
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "meals"
+  }
 }
 
 # Daily totals (pattern: pk="total#me", sk="YYYY-MM-DD")
@@ -45,16 +71,29 @@ resource "aws_dynamodb_table" "hb_daily_totals_dev" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute { name = "pk"; type = "S" }
-  attribute { name = "sk"; type = "S" }
+  attribute {
+    name = "pk"
+    type = "S"
+  }
 
-  point_in_time_recovery { enabled = true }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
 
-  tags = { app = "health-bot", stack = "dev", part = "totals" }
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "totals"
+  }
 }
 
 ################################
-# NEW: DynamoDB for migraines
+# DynamoDB for migraines
 ################################
 resource "aws_dynamodb_table" "hb_migraines_dev" {
   name         = "hb_migraines_dev"
@@ -62,10 +101,25 @@ resource "aws_dynamodb_table" "hb_migraines_dev" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute { name = "pk"; type = "S" }
-  attribute { name = "sk"; type = "S" }
-  attribute { name = "dt"; type = "S" }     # YYYY-MM-DD for start date
-  attribute { name = "is_open"; type = "N"} # 1 if not ended
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  attribute {
+    name = "dt"
+    type = "S"
+  } # YYYY-MM-DD for start date
+
+  attribute {
+    name = "is_open"
+    type = "N"
+  } # 1 if not ended
 
   # Find open episode quickly
   global_secondary_index {
@@ -83,13 +137,19 @@ resource "aws_dynamodb_table" "hb_migraines_dev" {
     projection_type = "ALL"
   }
 
-  point_in_time_recovery { enabled = true }
+  point_in_time_recovery {
+    enabled = true
+  }
 
-  tags = { app = "health-bot", stack = "dev", part = "migraines" }
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "migraines"
+  }
 }
 
 ################################
-# NEW: DynamoDB for medications
+# DynamoDB for medications
 ################################
 resource "aws_dynamodb_table" "hb_meds_dev" {
   name         = "hb_meds_dev"
@@ -97,9 +157,20 @@ resource "aws_dynamodb_table" "hb_meds_dev" {
   hash_key     = "pk" # user id
   range_key    = "sk" # "dt#<ms>"
 
-  attribute { name = "pk"; type = "S" }
-  attribute { name = "sk"; type = "S" }
-  attribute { name = "dt"; type = "S" } # YYYY-MM-DD
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  attribute {
+    name = "dt"
+    type = "S"
+  } # YYYY-MM-DD
 
   global_secondary_index {
     name            = "gsi_dt"
@@ -108,9 +179,15 @@ resource "aws_dynamodb_table" "hb_meds_dev" {
     projection_type = "ALL"
   }
 
-  point_in_time_recovery { enabled = true }
+  point_in_time_recovery {
+    enabled = true
+  }
 
-  tags = { app = "health-bot", stack = "dev", part = "meds" }
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "meds"
+  }
 }
 
 ################################
@@ -122,10 +199,25 @@ resource "aws_dynamodb_table" "hb_fasting_dev" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute { name = "pk"; type = "S" }     # user id
-  attribute { name = "sk"; type = "S" }     # "fast#<id>"
-  attribute { name = "dt"; type = "S" }     # YYYY-MM-DD (start date)
-  attribute { name = "is_open"; type = "N"} # 1 when ongoing
+  attribute {
+    name = "pk"
+    type = "S"
+  } # user id
+
+  attribute {
+    name = "sk"
+    type = "S"
+  } # "fast#<id>"
+
+  attribute {
+    name = "dt"
+    type = "S"
+  } # YYYY-MM-DD (start date)
+
+  attribute {
+    name = "is_open"
+    type = "N"
+  } # 1 when ongoing
 
   # open fast lookup
   global_secondary_index {
@@ -143,9 +235,15 @@ resource "aws_dynamodb_table" "hb_fasting_dev" {
     projection_type = "ALL"
   }
 
-  point_in_time_recovery { enabled = true }
+  point_in_time_recovery {
+    enabled = true
+  }
 
-  tags = { app = "health-bot", stack = "dev", part = "fasting" }
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "fasting"
+  }
 }
 
 ############################
@@ -172,7 +270,11 @@ data "aws_dynamodb_table" "hb_events_dev" {
 resource "aws_iam_role" "hb_meal_enricher_dev" {
   name               = "hb-meal-enricher-dev"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
-  tags               = { app = "health-bot", stack = "dev" }
+
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "hb_meal_enricher_logs" {
@@ -307,7 +409,7 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
 
       MIGRAINES_TABLE = aws_dynamodb_table.hb_migraines_dev.name
       MEDS_TABLE      = aws_dynamodb_table.hb_meds_dev.name
-      FASTING_TABLE   = aws_dynamodb_table.hb_fasting_dev.name   # NEW
+      FASTING_TABLE   = aws_dynamodb_table.hb_fasting_dev.name  # NEW
 
       NUTRITION_SECRET_NAME = "hb_nutrition_api_key_dev"
       TWILIO_SECRET_NAME    = "hb_twilio_dev"
@@ -319,7 +421,10 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
     }
   }
 
-  tags = { app = "health-bot", stack = "dev" }
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+  }
 }
 
 ############################
@@ -348,7 +453,9 @@ resource "aws_cloudwatch_metric_alarm" "meal_enricher_errors" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
 
-  dimensions = { FunctionName = aws_lambda_function.hb_meal_enricher_dev.function_name }
+  dimensions = {
+    FunctionName = aws_lambda_function.hb_meal_enricher_dev.function_name
+  }
 
   alarm_actions = [aws_sns_topic.ops_alarms_dev.arn]
   ok_actions    = [aws_sns_topic.ops_alarms_dev.arn]
