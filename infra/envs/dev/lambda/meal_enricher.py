@@ -23,8 +23,8 @@ USER_ID       = os.environ.get("USER_ID", "me")
 # Simulation toggle (/test or env)
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 
-# Medication safety limits (env overrideable)
-TRIPTAN_LIMIT_DPM = int(os.environ.get("TRIPTAN_LIMIT_DPM", "8"))   # days per month
+# Medication safety limits (env overrideable) – interpreted as **doses per month**
+TRIPTAN_LIMIT_DPM = int(os.environ.get("TRIPTAN_LIMIT_DPM", "8"))
 DHE_LIMIT_DPM     = int(os.environ.get("DHE_LIMIT_DPM", "6"))
 COMBO_LIMIT_DPM   = int(os.environ.get("COMBO_LIMIT_DPM", "8"))     # e.g., Excedrin
 PAIN_LIMIT_DPM    = int(os.environ.get("PAIN_LIMIT_DPM", "12"))     # simple analgesics/NSAIDs
@@ -36,6 +36,8 @@ over_tbl = ddb.Table(FOOD_OVERRIDES_TABLE)
 # NEW tables
 MIGRAINES_TABLE = os.environ.get("MIGRAINES_TABLE", "hb_migraines_dev")
 MEDS_TABLE      = os.environ.get("MEDS_TABLE", "hb_meds_dev")
+FASTING_TABLE   = os.environ.get("FASTING_TABLE", "hb_fasting_dev")  # <— NEW (episodes + goal)
+fast_tbl        = ddb.Table(FASTING_TABLE)
 
 NUTRITION_SECRET_NAME = os.environ["NUTRITION_SECRET_NAME"]
 TWILIO_SECRET_NAME    = os.environ.get("TWILIO_SECRET_NAME", "hb_twilio_dev")
@@ -56,6 +58,93 @@ TZ = ZoneInfo("America/New_York")
 def _norm_alias(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+def _today_est_from_ts(ts_ms: int | None) -> str:
+    if ts_ms is None:
+        return datetime.now(TZ).date().isoformat()
+    return datetime.fromtimestamp(ts_ms/1000, tz=TZ).date().isoformat()
+
+def _as_decimal(n) -> Decimal:
+    try:
+        if n is None: return Decimal("0")
+        d = Decimal(str(n));  return d if d >= 0 else Decimal("0")
+    except Exception:
+        return Decimal("0")
+
+def _as_decimal_signed(n) -> Decimal:
+    try:
+        return Decimal(str(n))
+    except Exception:
+        return Decimal("0")
+
+def _decimalize_tree(x):
+    if isinstance(x, float):   return _as_decimal(x)
+    if isinstance(x, int):     return _as_decimal(x)
+    if isinstance(x, Decimal): return x
+    if isinstance(x, dict):    return {k: _decimalize_tree(v) for k, v in x.items()}
+    if isinstance(x, list):    return [_decimalize_tree(v) for v in x]
+    return x
+
+def _parse_ts(val):
+    try:    return int(val)
+    except: return _now_ms()
+
+def _parse_when_to_ms(tokens: list[str]) -> int:
+    """Parse simple time phrases in EST."""
+    text = " ".join(tokens).strip().lower()
+    if not text or text == "now": return _now_ms()
+
+    base_dt = datetime.now(TZ)
+    if "yesterday" in text:
+        base_dt = base_dt - timedelta(days=1)
+        text = text.replace("yesterday", "").strip()
+
+    # ISO-like 'YYYY-MM-DD [HH:MM] [am|pm]'
+    m = re.match(r"(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}):(\d{2})\s*(am|pm)?)?$", text)
+    if m:
+        y,mn,d = map(int, m.group(1).split("-"))
+        hh = int(m.group(2) or 0); mm = int(m.group(3) or 0); ap = (m.group(4) or "").lower()
+        if ap in ("am","pm"):
+            if hh == 12: hh = 0
+            if ap == "pm": hh += 12
+        t = datetime(y, mn, d, hh, mm, tzinfo=TZ)
+        return int(t.timestamp()*1000)
+
+    # '7:30am' or '10 pm'
+    m = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", text)
+    if m:
+        hh = int(m.group(1)); mm = int(m.group(2) or 0); ap = (m.group(3) or "").lower()
+        if ap in ("am","pm"):
+            if hh == 12: hh = 0
+            if ap == "pm": hh += 12
+        t = datetime(base_dt.year, base_dt.month, base_dt.day, hh, mm, tzinfo=TZ)
+        return int(t.timestamp()*1000)
+
+    # 'today 8am'
+    m = re.match(r"(today)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", text)
+    if m:
+        hh = int(m.group(2)); mm = int(m.group(3) or 0); ap = (m.group(4) or "").lower()
+        if ap in ("am","pm"):
+            if hh == 12: hh = 0
+            if ap == "pm": hh += 12
+        t = datetime(base_dt.year, base_dt.month, base_dt.day, hh, mm, tzinfo=TZ)
+        return int(t.timestamp()*1000)
+
+    return _now_ms()
+
+def _month_bounds_est(ts_ms: int | None = None):
+    now = datetime.now(TZ) if ts_ms is None else datetime.fromtimestamp(ts_ms/1000, TZ)
+    start = now.replace(day=1).date()
+    end = now.date()
+    return start, end
+
+def _format_duration_mins(mins: int) -> str:
+    h = mins // 60; m = mins % 60
+    return f"{h}h {m:02d}m"
+
+# ----- Food override helpers -----
 def _get_override(alias: str):
     try:
         r = over_tbl.get_item(Key={"pk": USER_ID, "sk": _norm_alias(alias)})
@@ -106,12 +195,7 @@ def _macros_from_override(alias: str, qty: int = 1):
         "fat":     int(it.get("fat",0))*q
     }
 
-def _month_bounds_est(ts_ms: int | None = None):
-    now = datetime.now(TZ) if ts_ms is None else datetime.fromtimestamp(ts_ms/1000, TZ)
-    start = now.replace(day=1).date()
-    end = now.date()
-    return start, end
-
+# ----- Meds helpers -----
 def _med_category_key(cat: str) -> str:
     """Canonicalize med category names for storage/limits."""
     c = (cat or "").lower()
@@ -130,113 +214,32 @@ def _med_limits_for(cat_key: str) -> int | None:
         "normal pain med": PAIN_LIMIT_DPM,
     }.get(cat_key)
 
-def _count_med_days_this_month(cat_key: str) -> tuple[int, set[str]]:
-    """Count distinct YYYY-MM-DD days this month where meds of category cat_key were used."""
+def _count_med_doses_this_month(cat_key: str) -> int:
+    """Count total doses (items) this month for a given category."""
     start, end = _month_bounds_est()
-    days: set[str] = set()
+    total = 0
     d = start
     while d <= end:
-        q = meds_tbl.query(IndexName="gsi_dt", KeyConditionExpression=Key("dt").eq(d.isoformat()))
-        for it in q.get("Items", []):
-            if _med_category_key(it.get("category", "")) == cat_key:
-                days.add(d.isoformat())
+        q = meds_tbl.query(
+            IndexName="gsi_dt",
+            KeyConditionExpression=Key("dt").eq(d.isoformat())
+        )
+        items = q.get("Items", [])
+        total += sum(1 for it in items if _med_category_key(it.get("category","")) == cat_key)
         while "LastEvaluatedKey" in q:
             q = meds_tbl.query(
                 IndexName="gsi_dt",
                 KeyConditionExpression=Key("dt").eq(d.isoformat()),
                 ExclusiveStartKey=q["LastEvaluatedKey"],
             )
-            for it in q.get("Items", []):
-                if _med_category_key(it.get("category", "")) == cat_key:
-                    days.add(d.isoformat())
+            items = q.get("Items", [])
+            total += sum(1 for it in items if _med_category_key(it.get("category","")) == cat_key)
         d += timedelta(days=1)
-    return len(days), days
+    return total
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-def _today_est_from_ts(ts_ms: int | None) -> str:
-    if ts_ms is None:
-        return datetime.now(TZ).date().isoformat()
-    return datetime.fromtimestamp(ts_ms/1000, tz=TZ).date().isoformat()
-
-def _as_decimal(n) -> Decimal:
-    try:
-        if n is None: return Decimal("0")
-        d = Decimal(str(n))
-        return d if d >= 0 else Decimal("0")
-    except Exception:
-        return Decimal("0")
-
-def _as_decimal_signed(n) -> Decimal:
-    try:
-        return Decimal(str(n))
-    except Exception:
-        return Decimal("0")
-
-def _decimalize_tree(x):
-    if isinstance(x, float):   return _as_decimal(x)
-    if isinstance(x, int):     return _as_decimal(x)
-    if isinstance(x, Decimal): return x
-    if isinstance(x, dict):    return {k: _decimalize_tree(v) for k, v in x.items()}
-    if isinstance(x, list):    return [_decimalize_tree(v) for v in x]
-    return x
-
-def _parse_ts(val):
-    try:    return int(val)
-    except: return _now_ms()
-
-def _parse_when_to_ms(tokens: list[str]) -> int:
-    """Parse simple time phrases in EST."""
-    text = " ".join(tokens).strip().lower()
-    if not text or text == "now": return _now_ms()
-
-    base_dt = datetime.now(TZ)
-    if "yesterday" in text:
-        base_dt = base_dt - timedelta(days=1)
-        text = text.replace("yesterday", "").strip()
-
-    m = re.match(r"(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}):(\d{2})\s*(am|pm)?)?$", text)
-    if m:
-        y,mn,d = map(int, m.group(1).split("-"))
-        hh = int(m.group(2) or 0); mm = int(m.group(3) or 0); ap = (m.group(4) or "").lower()
-        if ap in ("am","pm"):
-            if hh == 12: hh = 0
-            if ap == "pm": hh += 12
-        t = datetime(y, mn, d, hh, mm, tzinfo=TZ)
-        return int(t.timestamp()*1000)
-
-    m = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", text)
-    if m:
-        hh = int(m.group(1)); mm = int(m.group(2) or 0); ap = (m.group(3) or "").lower()
-        if ap in ("am","pm"):
-            if hh == 12: hh = 0
-            if ap == "pm": hh += 12
-        t = datetime(base_dt.year, base_dt.month, base_dt.day, hh, mm, tzinfo=TZ)
-        return int(t.timestamp()*1000)
-
-    m = re.match(r"(today)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", text)
-    if m:
-        hh = int(m.group(2)); mm = int(m.group(3) or 0); ap = (m.group(4) or "").lower()
-        if ap in ("am","pm"):
-            if hh == 12: hh = 0
-            if ap == "pm": hh += 12
-        t = datetime(base_dt.year, base_dt.month, base_dt.day, hh, mm, tzinfo=TZ)
-        return int(t.timestamp()*1000)
-
-    return _now_ms()
-
-def _meal_id(user_id: str, dt: str, text: str, ts_ms: int) -> str:
-    raw = f"{user_id}|{dt}|{(text or '').strip()}|{ts_ms}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
-
-def _channel(sender: str) -> str:
-    return "wa" if str(sender).startswith("whatsapp:") else "sms"
-
-def _sender_e164(sender: str) -> str:
-    return sender.replace("whatsapp:", "")
-
+# ----- Nutritionix / comms -----
 def _nutritionix(query: str):
+    # Secret: {"app_id":"...","app_key":"..."}
     sec = secrets.get_secret_value(SecretId=NUTRITION_SECRET_NAME)
     cfg = json.loads(sec["SecretString"])
     headers = {"x-app-id": cfg["app_id"], "x-app-key": cfg["app_key"], "Content-Type": "application/json"}
@@ -266,7 +269,7 @@ def _send_sms(to_number: str, body: str) -> None:
     sec = secrets.get_secret_value(SecretId=TWILIO_SECRET_NAME)["SecretString"]
     cfg = json.loads(sec)
     account_sid = cfg["account_sid"]; auth_token  = cfg["auth_token"]
-    from_number = cfg.get("from_wa", "whatsapp:+14155238886")
+    from_number = cfg.get("from_wa", "whatsapp:+14155238886")  # sandbox
     if not to_number.startswith("whatsapp:"):
         to_number = "whatsapp:" + to_number.lstrip("+")
     url  = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
@@ -275,12 +278,12 @@ def _send_sms(to_number: str, body: str) -> None:
     if r.status_code >= 400:
         log.error(f"Twilio send failed {r.status_code}: {r.text}")
 
+# ----- Daily totals / summaries -----
 def _get_totals_for_day(dt: str) -> dict:
     key = {"pk": f"total#{USER_ID}", "sk": dt}
     r = totals_tbl.get_item(Key=key)
     return r.get("Item") or {"pk": key["pk"], "sk": key["sk"], "calories": 0, "protein": 0, "carbs": 0, "fat": 0}
 
-# ---------- summaries ----------
 def _format_summary_lines(totals: dict) -> str:
     cal = int(totals.get("calories", 0))
     pro = int(totals.get("protein", 0))
@@ -325,6 +328,7 @@ def _sum_range(start_d: date, end_d: date) -> dict:
     return {"cal": cal, "pro": pro, "carb": carb, "fat": fat, "days": days,
             "avg_cal": round(cal / days, 1), "avg_pro": round(pro / days, 1)}
 
+# ----- Barcode / food overrides -----
 def _parse_macros_arg(s: str) -> dict | None:
     if not s: return None
     out = {"calories":0,"protein":0,"carbs":0,"fat":0}
@@ -392,6 +396,7 @@ def _handle_food(sender: str, args: str):
 
     _send_sms(sender, "Usage: /food set <alias> k=.. p=.. c=.. f=.. | /food del <alias> | /food list")
 
+# ----- Week / month summaries -----
 def _handle_week(sender: str):
     today = datetime.now(TZ).date()
     start = today - timedelta(days=6)
@@ -399,31 +404,6 @@ def _handle_week(sender: str):
     msg = (f"This week (last {s['days']} days): {s['cal']} kcal, {s['pro']} P, {s['carb']} C, {s['fat']} F.\n"
            f"Daily avg: {s['avg_cal']} kcal vs {CALORIES_MAX}, {s['avg_pro']} P vs {PROTEIN_MIN}.")
     _send_sms(sender, msg)
-
-def _count_med_doses_this_month(cat_key: str) -> int:
-    """Count total doses (items) this month for a given category."""
-    start, end = _month_bounds_est()
-    total = 0
-    d = start
-    while d <= end:
-        q = meds_tbl.query(
-            IndexName="gsi_dt",
-            KeyConditionExpression=Key("dt").eq(d.isoformat())
-        )
-        items = q.get("Items", [])
-        total += sum(1 for it in items if _med_category_key(it.get("category","")) == cat_key)
-
-        while "LastEvaluatedKey" in q:
-            q = meds_tbl.query(
-                IndexName="gsi_dt",
-                KeyConditionExpression=Key("dt").eq(d.isoformat()),
-                ExclusiveStartKey=q["LastEvaluatedKey"],
-            )
-            items = q.get("Items", [])
-            total += sum(1 for it in items if _med_category_key(it.get("category","")) == cat_key)
-
-        d += timedelta(days=1)
-    return total
 
 def _handle_month(sender: str):
     today = datetime.now(TZ).date()
@@ -495,6 +475,16 @@ def _decrement_totals(dt: str, macros: dict) -> dict:
     got = totals_tbl.get_item(Key=key)
     return got.get("Item") or {}
 
+def _meal_id(user_id: str, dt: str, text: str, ts_ms: int) -> str:
+    raw = f"{user_id}|{dt}|{(text or '').strip()}|{ts_ms}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+def _channel(sender: str) -> str:
+    return "wa" if str(sender).startswith("whatsapp:") else "sms"
+
+def _sender_e164(sender: str) -> str:
+    return sender.replace("whatsapp:", "")
+
 # ---------- migraine tracking ----------
 MIG_CATS = ["non-aura", "aura", "tension", "other"]
 
@@ -504,14 +494,16 @@ def _parse_migraine_category(text: str) -> str:
     return "non-aura"
 
 def _open_episode():
+    """Return last open migraine episode or None."""
     resp = migs_tbl.query(
-        IndexName="gsi_open",
-        KeyConditionExpression=Key("pk").eq(USER_ID) & Key("is_open").eq(1),
-        Limit=1,
-        ScanIndexForward=False
+        KeyConditionExpression=Key("pk").eq(USER_ID) & Key("sk").begins_with("migraine#"),
+        ScanIndexForward=False,
+        Limit=25
     )
-    items = resp.get("Items", [])
-    return items[0] if items else None
+    for it in resp.get("Items", []):
+        if int(it.get("is_open", 0)) == 1:
+            return it
+    return None
 
 def _start_migraine(sender: str, when_ms: int, cat: str, note: str):
     ep_id = hashlib.sha256(f"{USER_ID}|{when_ms}".encode()).hexdigest()[:16]
@@ -630,12 +622,11 @@ def _log_med(sender: str, when_ms: int, text_after: str):
             warnings.append("⚠️ DHE should NOT be used within 24h of any triptan.")
 
     # --- monthly limit checks (doses used) ---
-    # Interpret *_LIMIT_DPM envs as *dose* limits per month now.
     limit = _med_limits_for(cat_key)
     used_doses = None
     if limit:
-        used_doses = _count_med_doses_this_month(cat_key)  # before inserting today's dose
-        would_be = used_doses + 1                          # include this dose
+        used_doses = _count_med_doses_this_month(cat_key)  # before including this dose
+        would_be = used_doses + 1
         pct = 0 if limit == 0 else round(would_be / limit, 2)
         if would_be > limit:
             warnings.append(f"⚠️ Over monthly {cat_key} dose limit: {would_be}/{limit}.")
@@ -650,21 +641,155 @@ def _log_med(sender: str, when_ms: int, text_after: str):
         + (f" {msg_tail}" if msg_tail else "")
     )
 
+# ---------- IF (intermittent fasting) ----------
+def _fast_goal_key():
+    return {"pk": USER_ID, "sk": "goal"}
+
+def _get_fast_goal_hours(default_hours: int = 16) -> int:
+    try:
+        item = fast_tbl.get_item(Key=_fast_goal_key()).get("Item")
+        if item and "hours" in item:
+            return int(item["hours"])
+    except Exception:
+        pass
+    return default_hours
+
+def _set_fast_goal_hours(hours: int):
+    fast_tbl.put_item(Item={**_fast_goal_key(), "hours": _as_decimal(hours), "updated_ms": _as_decimal(_now_ms())})
+
+def _open_fast():
+    """Return the most recent open fast or None."""
+    resp = fast_tbl.query(
+        KeyConditionExpression=Key("pk").eq(USER_ID) & Key("sk").begins_with("fast#"),
+        ScanIndexForward=False,
+        Limit=25
+    )
+    for it in resp.get("Items", []):
+        if int(it.get("is_open", 0)) == 1:
+            return it
+    return None
+
+def _start_fast(sender: str, when_ms: int):
+    ep_id = hashlib.sha256(f"fast|{USER_ID}|{when_ms}".encode()).hexdigest()[:16]
+    sk = f"fast#{ep_id}"
+    dt = _today_est_from_ts(when_ms)
+    item = {
+        "pk": USER_ID, "sk": sk, "episode_id": ep_id, "dt": dt,
+        "start_ms": _as_decimal(when_ms), "end_ms": _as_decimal(0),
+        "is_open": _as_decimal(1), "schema_version": 1
+    }
+    fast_tbl.put_item(Item=item, ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)")
+    events_tbl.put_item(Item={"pk": USER_ID, "sk": str(_now_ms()), "type": "fast.start", "dt": dt, "start_ms": _as_decimal(when_ms)})
+    tdisp = datetime.fromtimestamp(when_ms/1000, TZ).strftime('%-I:%M %p %Z')
+    _send_sms(sender, f"Fasting started at {tdisp}.")
+
+def _end_fast(sender: str, when_ms: int):
+    ep = _open_fast()
+    if not ep:
+        _send_sms(sender, "No open fast to end."); return
+    key = {"pk": ep["pk"], "sk": ep["sk"]}
+    fast_tbl.update_item(
+        Key=key,
+        UpdateExpression="SET end_ms=:e, is_open=:z",
+        ExpressionAttributeValues={":e": _as_decimal(when_ms), ":z": _as_decimal(0)}
+    )
+    start_ms = int(ep.get("start_ms", 0))
+    dur_min = max(0, int((when_ms - start_ms)/60000))
+    goal = _get_fast_goal_hours()
+    status = "✅ Met goal" if dur_min >= goal*60 else f"⏳ Short by {max(0, goal*60 - dur_min)} min"
+    events_tbl.put_item(Item={"pk": USER_ID, "sk": str(_now_ms()), "type": "fast.end", "dt": _today_est_from_ts(when_ms),
+                              "start_ms": _as_decimal(start_ms), "end_ms": _as_decimal(when_ms), "dur_min": _as_decimal(dur_min)})
+    _send_sms(sender, f"Fast ended. Duration ≈ {_format_duration_mins(dur_min)} ({status}).")
+
+def _fast_status(sender: str):
+    # if open: show current elapsed + goal; else show last completed
+    ep = _open_fast()
+    goal = _get_fast_goal_hours()
+    if ep:
+        start_ms = int(ep.get("start_ms", 0))
+        now_ms = _now_ms()
+        dur_min = max(0, int((now_ms - start_ms)/60000))
+        pct = min(100, int((dur_min/(goal*60)) * 100)) if goal > 0 else 0
+        tstart = datetime.fromtimestamp(start_ms/1000, TZ).strftime('%-I:%M %p %Z')
+        _send_sms(sender, f"Fasting (open since {tstart}): {_format_duration_mins(dur_min)} elapsed. Goal: {goal}h ({pct}%).")
+        return
+    # find last completed
+    resp = fast_tbl.query(
+        KeyConditionExpression=Key("pk").eq(USER_ID) & Key("sk").begins_with("fast#"),
+        ScanIndexForward=False,
+        Limit=50
+    )
+    for it in resp.get("Items", []):
+        if int(it.get("is_open", 0)) == 0 and int(it.get("end_ms", 0)) > 0:
+            dur_min = max(0, int((int(it["end_ms"]) - int(it["start_ms"])) / 60000))
+            tstart = datetime.fromtimestamp(int(it["start_ms"])/1000, TZ).strftime('%Y-%m-%d %-I:%M%p')
+            tend   = datetime.fromtimestamp(int(it["end_ms"])  /1000, TZ).strftime('%Y-%m-%d %-I:%M%p')
+            met = "✅ Met goal" if dur_min >= goal*60 else "⏳ Missed goal"
+            _send_sms(sender, f"Last fast: {tstart} → {tend} ({_format_duration_mins(dur_min)}). {met} (goal {goal}h).")
+            return
+    _send_sms(sender, "No fasting history yet. Try `/fast start`.")
+
+def _handle_fast(sender: str, args: str, simulate: bool = False):
+    """
+    /fast start [when]
+    /fast end [when]
+    /fast status
+    /fast goal <hours>
+    """
+    parts = (args or "").strip().split()
+    if not parts:
+        _send_sms(sender, "Use `/fast start [when]`, `/fast end [when]`, `/fast status`, or `/fast goal <hours>`"); return
+    sub = parts[0].lower()
+
+    if sub == "goal":
+        if len(parts) < 2 or not re.match(r"^\d{1,2}$", parts[1]):
+            _send_sms(sender, "Usage: /fast goal <hours>"); return
+        hrs = int(parts[1])
+        if simulate or DRY_RUN:
+            _send_sms(sender, f"[TEST] Would set fasting goal to {hrs}h"); return
+        _set_fast_goal_hours(hrs)
+        _send_sms(sender, f"Fasting goal set to {hrs}h.")
+        return
+
+    if sub == "status":
+        _fast_status(sender); return
+
+    if sub in ("start","end"):
+        # parse optional time tokens after subcommand
+        when_tokens = parts[1:]
+        when_ms = _parse_when_to_ms(when_tokens)
+        if simulate or DRY_RUN:
+            tdisp = datetime.fromtimestamp(when_ms/1000, TZ).strftime('%-I:%M %p %Z')
+            _send_sms(sender, f"[TEST] Would {sub} fast at {tdisp}.")
+            return
+        if sub == "start": _start_fast(sender, when_ms)
+        else:               _end_fast(sender, when_ms)
+        return
+
+    _send_sms(sender, "Use `/fast start [when]`, `/fast end [when]`, `/fast status`, or `/fast goal <hours>`")
+
 # ---------- commands ----------
 def _handle_help(sender: str):
     _send_sms(sender,
         "Commands:\n"
-        "• meal: <desc>      – log a meal\n"
-        "• /summary          – today’s totals (EST)\n"
-        "• /week             – last 7 days summary\n"
-        "• /month            – month-to-date summary\n"
-        "• /lookup: <desc>   – predict totals (no save)\n"
-        "• /undo             – remove the last meal today\n"
-        "• /reset today      – zero today’s totals\n"
+        "• meal: <desc>            – log a meal\n"
+        "• /lookup: <desc>         – predict totals (no save)\n"
+        "• /summary                – today’s totals (EST)\n"
+        "• /week                   – last 7 days summary\n"
+        "• /month                  – month-to-date summary\n"
+        "• /undo                   – remove the last meal today\n"
+        "• /reset today            – zero today’s totals\n"
+        "• /barcode <digits>       – look up a UPC\n"
+        "• /food set <alias> k=.. p=.. c=.. f=.. | /food del <alias> | /food list\n"
         "• /migraine start [when] [category] [note]\n"
         "• /migraine end [when] [note]\n"
-        "• /med <name/dose/when>  – log medication\n"
-        "• /meds             – month meds usage vs limits"
+        "• /med <name/dose/when>   – log medication (dose-based limits)\n"
+        "• /meds                   – doses this month by category\n"
+        "• /fast start [when]      – start a fast (IF)\n"
+        "• /fast end [when]        – end current fast\n"
+        "• /fast status            – current or last fast summary\n"
+        "• /fast goal <hours>      – set fasting goal (e.g., 16)\n"
+        "• /test <command...>      – simulate without saving\n"
     )
 
 def _handle_summary(sender: str, dt: str):
@@ -714,8 +839,6 @@ def _handle_meal(sender: str, dt: str, ts_ms: int, meal_pk: str, text: str, simu
     if not created: log.info("Idempotent meal write skipped.")
     new_totals = _update_totals(dt, macros)
     if sender: _send_sms(sender, _format_meal_reply(macros, new_totals))
-
-
 
 def _handle_undo(sender: str, dt: str, simulate: bool = False):
     resp = meals_tbl.query(KeyConditionExpression=Key("pk").eq(USER_ID) & Key("sk").begins_with(f"{dt}#"))
@@ -790,7 +913,6 @@ def _handle_meds(sender: str):
             lines.append(f"• {ck}: {doses} dose(s)")
     _send_sms(sender, "\n".join(lines))
 
-
 def _handle_med(sender: str, args: str, simulate: bool = False):
     """
     /med <free text>
@@ -864,9 +986,13 @@ def lambda_handler(event, context):
             _handle_migraine(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)
         elif lower.startswith("/med"):
             _handle_med(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)
+        elif lower.startswith("/fast"):
+            _handle_fast(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)
         elif lower.startswith("meal:") or lower.startswith("meal "):
             meal_text = raw_text.split(":", 1)[1].strip() if ":" in raw_text else raw_text.split(" ", 1)[1].strip()
             _handle_meal(sender, dt, ts_ms, meal_pk, meal_text, simulate=simulate) if meal_text else _send_sms(sender, "Try: meal: greek yogurt + berries")
         else:
-            _send_sms(sender, "Unrecognized. Send `meal: ...`, `/summary`, `/week`, `/month`, `/lookup: ...`, `/undo`, `/reset today`, `/migraine ...`, `/med ...`, or `/help`")
+            _send_sms(sender,
+                "Unrecognized. Send `meal: ...`, `/lookup: ...`, `/summary`, `/week`, `/month`, `/undo`, `/reset today`, "
+                "`/barcode ...`, `/food ...`, `/migraine ...`, `/med ...`, `/meds`, `/fast ...`, or `/help`")
     return {"ok": True}
