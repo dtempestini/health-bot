@@ -30,9 +30,7 @@ phases:
       - command -v zip >/dev/null || ( (dnf -y install zip || yum -y install zip || apt-get update && apt-get install -y zip) || true )
 
       - python3 -m pip install --upgrade pip
-      # OPTIONAL dev requirements (don’t fail if file not present)
-      - if [ -f "$ROOT/requirements-dev.txt" ]; then python3 -m pip install -r "$ROOT/requirements-dev.txt"; else echo "No requirements-dev.txt; skipping"; fi
-
+      
       # build requests layer
       - mkdir -p "$LAYER_DIR/python"
       - rm -f "$ROOT/lambda/requests-layer.zip" || true
