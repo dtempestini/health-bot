@@ -139,6 +139,8 @@ resource "aws_codepipeline" "infra_pipeline" {
     }
   }
 
+/* comment out approval
+
   stage {
     name = "Approve"
     action {
@@ -149,6 +151,7 @@ resource "aws_codepipeline" "infra_pipeline" {
       version  = "1"
     }
   }
+*/
 
   stage {
     name = "Apply"
