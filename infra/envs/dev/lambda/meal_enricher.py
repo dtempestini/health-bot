@@ -19,16 +19,19 @@ MEALS_TABLE   = os.environ["MEALS_TABLE"]        # hb_meals_dev
 TOTALS_TABLE  = os.environ["TOTALS_TABLE"]       # hb_daily_totals_dev
 EVENTS_TABLE  = os.environ["EVENTS_TABLE"]       # hb_events_dev
 USER_ID       = os.environ.get("USER_ID", "me")
+
+# Simulation toggle (/test or env)
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
+
 # Medication safety limits (env overrideable)
 TRIPTAN_LIMIT_DPM = int(os.environ.get("TRIPTAN_LIMIT_DPM", "8"))   # days per month
 DHE_LIMIT_DPM     = int(os.environ.get("DHE_LIMIT_DPM", "6"))
 COMBO_LIMIT_DPM   = int(os.environ.get("COMBO_LIMIT_DPM", "8"))     # e.g., Excedrin
 PAIN_LIMIT_DPM    = int(os.environ.get("PAIN_LIMIT_DPM", "12"))     # simple analgesics/NSAIDs
 NEAR_THRESH_PCT   = float(os.environ.get("NEAR_THRESH_PCT", "0.75"))
+
 FOOD_OVERRIDES_TABLE = os.environ.get("FOOD_OVERRIDES_TABLE", "hb_food_overrides_dev")
 over_tbl = ddb.Table(FOOD_OVERRIDES_TABLE)
-
 
 # NEW tables
 MIGRAINES_TABLE = os.environ.get("MIGRAINES_TABLE", "hb_migraines_dev")
@@ -37,7 +40,7 @@ MEDS_TABLE      = os.environ.get("MEDS_TABLE", "hb_meds_dev")
 NUTRITION_SECRET_NAME = os.environ["NUTRITION_SECRET_NAME"]
 TWILIO_SECRET_NAME    = os.environ.get("TWILIO_SECRET_NAME", "hb_twilio_dev")
 
-# Goals
+# Goals (defaults; can be overridden in TF env)
 CALORIES_MAX = int(os.environ.get("CALORIES_MAX", "1800"))
 PROTEIN_MIN  = int(os.environ.get("PROTEIN_MIN",  "190"))
 
@@ -78,7 +81,6 @@ def _del_override(alias: str):
 def _match_override_in_text(text: str):
     """Return (alias, qty) if meal text contains a known alias; supports '2x alias' or 'alias x2'."""
     t = _norm_alias(text)
-    # try simple xN patterns
     m = re.search(r"(\d+)\s*x\s+([a-z].+)$", t)
     if m:
         qty = int(m.group(1)); alias = _norm_alias(m.group(2))
@@ -87,7 +89,6 @@ def _match_override_in_text(text: str):
     if m:
         alias = _norm_alias(m.group(1)); qty = int(m.group(2))
         if _get_override(alias): return alias, qty
-    # direct alias match
     parts = re.split(r"[,+/]| and ", t)
     for p in parts:
         a = _norm_alias(p)
@@ -112,13 +113,14 @@ def _month_bounds_est(ts_ms: int | None = None):
     return start, end
 
 def _med_category_key(cat: str) -> str:
-    c = cat.lower()
+    """Canonicalize med category names for storage/limits."""
+    c = (cat or "").lower()
     if c in ("triptan",): return "triptan"
     if c in ("dhe","d.h.e.","d.h.e"): return "dhe"
     if c in ("excedrin",): return "excedrin"
     if c in ("normal pain med","nsaid","ibuprofen","naproxen","acetaminophen","tylenol","advil","aleve"):
         return "normal pain med"
-    return c
+    return c or "unknown"
 
 def _med_limits_for(cat_key: str) -> int | None:
     return {
@@ -129,22 +131,15 @@ def _med_limits_for(cat_key: str) -> int | None:
     }.get(cat_key)
 
 def _count_med_days_this_month(cat_key: str) -> tuple[int, set[str]]:
-    """
-    Count distinct YYYY-MM-DD days this month where meds of category cat_key were used.
-    Uses the gsi_dt (hash: dt) and loops per day (cheap at your scale).
-    """
+    """Count distinct YYYY-MM-DD days this month where meds of category cat_key were used."""
     start, end = _month_bounds_est()
     days: set[str] = set()
     d = start
     while d <= end:
-        q = meds_tbl.query(
-            IndexName="gsi_dt",
-            KeyConditionExpression=Key("dt").eq(d.isoformat())
-        )
+        q = meds_tbl.query(IndexName="gsi_dt", KeyConditionExpression=Key("dt").eq(d.isoformat()))
         for it in q.get("Items", []):
             if _med_category_key(it.get("category", "")) == cat_key:
                 days.add(d.isoformat())
-        # paginate if needed
         while "LastEvaluatedKey" in q:
             q = meds_tbl.query(
                 IndexName="gsi_dt",
@@ -156,7 +151,6 @@ def _count_med_days_this_month(cat_key: str) -> tuple[int, set[str]]:
                     days.add(d.isoformat())
         d += timedelta(days=1)
     return len(days), days
-
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -193,33 +187,25 @@ def _parse_ts(val):
     except: return _now_ms()
 
 def _parse_when_to_ms(tokens: list[str]) -> int:
-    """
-    Parse simple time phrases in EST:
-      - 'now' (default), 'yesterday', 'today 7:30am', '10:15 pm', '2025-10-20 08:00'
-    """
+    """Parse simple time phrases in EST."""
     text = " ".join(tokens).strip().lower()
     if not text or text == "now": return _now_ms()
 
-    # detect 'yesterday'
     base_dt = datetime.now(TZ)
     if "yesterday" in text:
         base_dt = base_dt - timedelta(days=1)
         text = text.replace("yesterday", "").strip()
 
-    # ISO date first
     m = re.match(r"(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}):(\d{2})\s*(am|pm)?)?$", text)
     if m:
         y,mn,d = map(int, m.group(1).split("-"))
-        hh = int(m.group(2) or 0)
-        mm = int(m.group(3) or 0)
-        ap = (m.group(4) or "").lower()
+        hh = int(m.group(2) or 0); mm = int(m.group(3) or 0); ap = (m.group(4) or "").lower()
         if ap in ("am","pm"):
             if hh == 12: hh = 0
             if ap == "pm": hh += 12
         t = datetime(y, mn, d, hh, mm, tzinfo=TZ)
         return int(t.timestamp()*1000)
 
-    # time like '7:30am' or '10 pm'
     m = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", text)
     if m:
         hh = int(m.group(1)); mm = int(m.group(2) or 0); ap = (m.group(3) or "").lower()
@@ -229,7 +215,6 @@ def _parse_when_to_ms(tokens: list[str]) -> int:
         t = datetime(base_dt.year, base_dt.month, base_dt.day, hh, mm, tzinfo=TZ)
         return int(t.timestamp()*1000)
 
-    # 'today 8am'
     m = re.match(r"(today)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", text)
     if m:
         hh = int(m.group(2)); mm = int(m.group(3) or 0); ap = (m.group(4) or "").lower()
@@ -239,7 +224,6 @@ def _parse_when_to_ms(tokens: list[str]) -> int:
         t = datetime(base_dt.year, base_dt.month, base_dt.day, hh, mm, tzinfo=TZ)
         return int(t.timestamp()*1000)
 
-    # fallback: now
     return _now_ms()
 
 def _meal_id(user_id: str, dt: str, text: str, ts_ms: int) -> str:
@@ -253,7 +237,6 @@ def _sender_e164(sender: str) -> str:
     return sender.replace("whatsapp:", "")
 
 def _nutritionix(query: str):
-    # Secret: {"app_id":"...","app_key":"..."}
     sec = secrets.get_secret_value(SecretId=NUTRITION_SECRET_NAME)
     cfg = json.loads(sec["SecretString"])
     headers = {"x-app-id": cfg["app_id"], "x-app-key": cfg["app_key"], "Content-Type": "application/json"}
@@ -283,7 +266,7 @@ def _send_sms(to_number: str, body: str) -> None:
     sec = secrets.get_secret_value(SecretId=TWILIO_SECRET_NAME)["SecretString"]
     cfg = json.loads(sec)
     account_sid = cfg["account_sid"]; auth_token  = cfg["auth_token"]
-    from_number = cfg.get("from_wa", "whatsapp:+14155238886")  # sandbox
+    from_number = cfg.get("from_wa", "whatsapp:+14155238886")
     if not to_number.startswith("whatsapp:"):
         to_number = "whatsapp:" + to_number.lstrip("+")
     url  = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
@@ -328,30 +311,25 @@ def _format_meal_reply(macros: dict, new_totals: dict) -> str:
     return "\n".join(lines)
 
 def _sum_range(start_d: date, end_d: date) -> dict:
-    """Sum totals from hb_daily_totals_dev between start and end inclusive."""
-    # DDB Query by PK and SK between
     resp = totals_tbl.query(
-        KeyConditionExpression=Key("pk").eq(f"total#{USER_ID}") & Key("sk").between(
-            start_d.isoformat(), end_d.isoformat()
-        )
+        KeyConditionExpression=Key("pk").eq(f"total#{USER_ID}") &
+                               Key("sk").between(start_d.isoformat(), end_d.isoformat())
     )
     cal = pro = carb = fat = 0
     for it in resp.get("Items", []):
         cal += int(it.get("calories", 0))
         pro += int(it.get("protein", 0))
         carb += int(it.get("carbs", 0))
-        fat += int(it.get("fat", 0))
+        fat  += int(it.get("fat", 0))
     days = (end_d - start_d).days + 1
     return {"cal": cal, "pro": pro, "carb": carb, "fat": fat, "days": days,
             "avg_cal": round(cal / days, 1), "avg_pro": round(pro / days, 1)}
 
 def _parse_macros_arg(s: str) -> dict | None:
-    # accepts k=, kcal=, p=, protein=, c=, carbs=, f=, fat=
     if not s: return None
     out = {"calories":0,"protein":0,"carbs":0,"fat":0}
     for part in re.split(r"[,\s]+", s.strip()):
-        if not part: continue
-        if "=" not in part: continue
+        if not part or "=" not in part: continue
         k,v = part.split("=",1)
         try: v = int(float(v))
         except: continue
@@ -379,19 +357,15 @@ def _handle_barcode(sender: str, args: str):
     carb = int(round(it.get("nf_total_carbohydrate", 0) or 0))
     fat  = int(round(it.get("nf_total_fat", 0) or 0))
     name = it.get("food_name","item")
-    _send_sms(sender, f"Barcode: {name}\n{ kcal } kcal ({ pro }P / { carb }C / { fat }F)\nTip: /food set {name} k={kcal} p={pro} c={carb} f={fat}")
+    _send_sms(sender, f"Barcode: {name}\n{kcal} kcal ({pro}P / {carb}C / {fat}F)\nTip: /food set {name} k={kcal} p={pro} c={carb} f={fat}")
 
 def _handle_food(sender: str, args: str):
-    # /food set <alias> k=... p=... c=... f=... [note...]
-    # /food del <alias>
-    # /food list
     if not args:
         _send_sms(sender, "Usage: /food set <alias> k=.. p=.. c=.. f=.. | /food del <alias> | /food list"); return
     parts = args.split()
     sub = parts[0].lower()
 
     if sub == "list":
-        # simple scan by user (small scale)
         r = over_tbl.query(KeyConditionExpression=Key("pk").eq(USER_ID))
         items = r.get("Items", [])
         if not items: _send_sms(sender, "No custom foods."); return
@@ -505,8 +479,6 @@ def _parse_migraine_category(text: str) -> str:
     return "non-aura"
 
 def _open_episode():
-    """Return last open episode or None."""
-    # Query GSI for open episodes quickly
     resp = migs_tbl.query(
         IndexName="gsi_open",
         KeyConditionExpression=Key("pk").eq(USER_ID) & Key("is_open").eq(1),
@@ -532,8 +504,7 @@ def _start_migraine(sender: str, when_ms: int, cat: str, note: str):
 def _end_migraine(sender: str, when_ms: int, note: str):
     ep = _open_episode()
     if not ep:
-        _send_sms(sender, "No open migraine to end.")
-        return
+        _send_sms(sender, "No open migraine to end."); return
     key = {"pk": ep["pk"], "sk": ep["sk"]}
     migs_tbl.update_item(
         Key=key,
@@ -561,12 +532,10 @@ MED_CATS = {
 
 def _classify_med(text: str) -> tuple[str,str]:
     t = text.lower()
-    # direct hit
     for cat, names in MED_CATS.items():
         for n in names:
             if n in t:
                 return (cat, n)
-    # fuzzy to a flattened name list
     flat = {n: cat for cat, names in MED_CATS.items() for n in names}
     tokens = re.findall(r"[a-z]+", t)
     best = None
@@ -578,29 +547,31 @@ def _classify_med(text: str) -> tuple[str,str]:
     return ("unknown", t.strip())
 
 def _log_med(sender: str, when_ms: int, text_after: str):
-    # try to extract dose if present
     dose_match = re.search(r"(\d+\.?\d*)\s*(mg|mcg|g|ml)", text_after.lower())
     dose = dose_match.group(0) if dose_match else ""
+
     raw_cat, matched_name = _classify_med(text_after)
-    cat_key = _med_category_key(raw_cat)  # normalize once ("DHE" -> "dhe", etc.)
+    cat_key = _med_category_key(raw_cat)
 
     dt = _today_est_from_ts(when_ms)
     sk = f"{dt}#{when_ms}"
     item = {
         "pk": USER_ID, "sk": sk, "dt": dt,
         "ts_ms": _as_decimal(when_ms), "text": text_after.strip(),
-        "category": cat_key,                # <-- store normalized category
-        "matched_name": matched_name, "dose": dose
+        "category": cat_key,
+        "matched_name": matched_name, "dose": dose,
+        "schema_version": 1,
     }
     meds_tbl.put_item(Item=item)
-    # Link to open migraine if present (soft link, by episode_id)
+
+    # Link to open migraine if present
     ep = _open_episode()
     link_msg = ""
     if ep:
         migs_tbl.update_item(
             Key={"pk": ep["pk"], "sk": ep["sk"]},
             UpdateExpression="SET meds = list_append(if_not_exists(meds, :z), :m)",
-            ExpressionAttributeValues={":z": [], ":m": [item]}
+            ExpressionAttributeValues={":z": [], ":m": [item]},
         )
         link_msg = " (linked to current migraine)"
 
@@ -620,42 +591,37 @@ def _log_med(sender: str, when_ms: int, text_after: str):
             )
             recent.extend(q.get("Items", []))
 
-    # Normalize for checks
     recent_cats = [
-        (_med_category_key(it.get("category","")), int(it.get("ts_ms", 0)))
+        (_med_category_key(it.get("category", "")), int(it.get("ts_ms", 0)))
         for it in recent
         if abs(when_ms - int(it.get("ts_ms", 0))) < 24*60*60*1000
     ]
 
     if cat_key == "triptan":
-        if any(rc in ("dhe","triptan") and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
+        if any(rc in ("dhe", "triptan") and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
             warnings.append("⚠️ Triptans should NOT be used within 24h of any triptan or DHE.")
-
     if cat_key == "dhe":
         if any(rc == "triptan" and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
             warnings.append("⚠️ DHE should NOT be used within 24h of any triptan.")
 
-
     # --- monthly limit checks (days used) ---
-    cat_key = _med_category_key(cat)
     limit = _med_limits_for(cat_key)
     if limit:
         used_days, day_set = _count_med_days_this_month(cat_key)
-        # If we haven't already counted today's day and this isn't simulate, include it in 'would-be' count
         would_be = used_days if dt in day_set else used_days + 1
-        pct = 0 if limit == 0 else round(would_be/limit, 2)
+        pct = 0 if limit == 0 else round(would_be / limit, 2)
         if would_be > limit:
             warnings.append(f"⚠️ Over monthly {cat_key} limit: {would_be}/{limit} days.")
         elif pct >= NEAR_THRESH_PCT:
             warnings.append(f"⚠️ Approaching monthly {cat_key} limit: {would_be}/{limit} days.")
 
-    # Tailor reply
-    summary_note = ""
-    if limit:
-        summary_note = f"{cat_key.capitalize()} this month: {used_days}/{limit} days."
-    msg_tail = f"{' '.join(warnings)}".strip()
-
-    _send_sms(sender, f"Logged med: {cat_key}{' ' + dose if dose else ''}{link_msg}. {summary_note}" + (f" {msg_tail}" if msg_tail else ""))
+    summary_note = f"{cat_key.capitalize()} this month: {used_days}/{limit} days." if limit else ""
+    msg_tail = " ".join(warnings).strip()
+    _send_sms(
+        sender,
+        f"Logged med: {cat_key}{(' ' + dose) if dose else ''}{link_msg}. {summary_note}"
+        + (f" {msg_tail}" if msg_tail else "")
+    )
 
 # ---------- commands ----------
 def _handle_help(sender: str):
@@ -674,7 +640,6 @@ def _handle_help(sender: str):
         "• /meds             – month meds usage vs limits"
     )
 
-
 def _handle_summary(sender: str, dt: str):
     _send_sms(sender, _format_summary_lines(_get_totals_for_day(dt)))
 
@@ -692,70 +657,36 @@ def _handle_lookup(sender: str, dt: str, text_after_lookup: str):
     _send_sms(sender, "\n".join(lines))
 
 def _handle_meal(sender: str, dt: str, ts_ms: int, meal_pk: str, text: str, simulate: bool = False):
-    """
-    Logs a meal. If the meal text contains a saved override alias (e.g., 'canned tuna' or '2x canned tuna'),
-    use those macros; otherwise call Nutritionix. In /test (simulate) mode we don't write to Dynamo.
-    """
     channel = _channel(sender)
-
-    # --- 1) Try custom food override first ---
-    alias, qty = _match_override_in_text(text)  # requires helpers added earlier
+    alias, qty = _match_override_in_text(text)
     if alias:
-        macros = _macros_from_override(alias, qty)  # returns dict with calories/protein/carbs/fat
-        if not macros:
-            # Shouldn't happen, but fall back gracefully to Nutritionix
-            macros, _ = _nutritionix(text)
-        else:
-            if simulate or DRY_RUN:
-                today = _get_totals_for_day(dt)
-                hypo_cal = int(today.get("calories", 0)) + macros["calories"]
-                hypo_pro = int(today.get("protein", 0))  + macros["protein"]
-                _send_sms(
-                    sender,
-                    f"[TEST] Would save meal (override {alias} x{qty}): "
-                    f"{macros['calories']} kcal ({macros['protein']} P / {macros['carbs']} C / {macros['fat']} F).\n"
-                    f"Totals would become: {hypo_cal} / {CALORIES_MAX} kcal, {hypo_pro} / {PROTEIN_MIN} P."
-                )
-                return
-
-            # Persist using the override macros
-            _write_enriched_event(
-                meal_pk=meal_pk, ts_ms=ts_ms, dt=dt, text=f"[override] {text}",
-                macros=macros, channel=channel
-            )
-            created, meal_id = _put_meal_row_idempotent(
-                USER_ID, dt, ts_ms, sender, text, macros, channel
-            )
-            if not created:
-                log.info("Idempotent meal write skipped (override).")
-            new_totals = _update_totals(dt, macros)
-            if sender:
-                _send_sms(sender, _format_meal_reply(macros, new_totals))
+        macros = _macros_from_override(alias, qty) or _nutritionix(text)[0]
+        if simulate or DRY_RUN:
+            today = _get_totals_for_day(dt)
+            hypo_cal = int(today.get("calories", 0)) + macros["calories"]
+            hypo_pro = int(today.get("protein", 0))  + macros["protein"]
+            _send_sms(sender, f"[TEST] Would save meal (override {alias} x{qty}): {macros['calories']} kcal ({macros['protein']} P / {macros['carbs']} C / {macros['fat']} F).\nTotals would become: {hypo_cal} / {CALORIES_MAX} kcal, {hypo_pro} / {PROTEIN_MIN} P.")
             return
+        _write_enriched_event(meal_pk=meal_pk, ts_ms=ts_ms, dt=dt, text=f"[override] {text}", macros=macros, channel=channel)
+        created, _ = _put_meal_row_idempotent(USER_ID, dt, ts_ms, sender, text, macros, channel)
+        if not created: log.info("Idempotent meal write skipped (override).")
+        new_totals = _update_totals(dt, macros)
+        if sender: _send_sms(sender, _format_meal_reply(macros, new_totals))
+        return
 
-    # --- 2) No override matched → use Nutritionix ---
-    macros, items = _nutritionix(text)
-
+    macros, _ = _nutritionix(text)
     if simulate or DRY_RUN:
         today = _get_totals_for_day(dt)
         hypo_cal = int(today.get("calories", 0)) + macros["calories"]
         hypo_pro = int(today.get("protein", 0))  + macros["protein"]
-        _send_sms(
-            sender,
-            f"[TEST] Would save meal: {macros['calories']} kcal "
-            f"({macros['protein']} P / {macros['carbs']} C / {macros['fat']} F).\n"
-            f"Totals would become: {hypo_cal} / {CALORIES_MAX} kcal, {hypo_pro} / {PROTEIN_MIN} P."
-        )
+        _send_sms(sender, f"[TEST] Would save meal: {macros['calories']} kcal ({macros['protein']} P / {macros['carbs']} C / {macros['fat']} F).\nTotals would become: {hypo_cal} / {CALORIES_MAX} kcal, {hypo_pro} / {PROTEIN_MIN} P.")
         return
 
     _write_enriched_event(meal_pk=meal_pk, ts_ms=ts_ms, dt=dt, text=text, macros=macros, channel=channel)
-    created, meal_id = _put_meal_row_idempotent(USER_ID, dt, ts_ms, sender, text, macros, channel)
-    if not created:
-        log.info("Idempotent meal write skipped.")
+    created, _ = _put_meal_row_idempotent(USER_ID, dt, ts_ms, sender, text, macros, channel)
+    if not created: log.info("Idempotent meal write skipped.")
     new_totals = _update_totals(dt, macros)
-    if sender:
-        _send_sms(sender, _format_meal_reply(macros, new_totals))
-
+    if sender: _send_sms(sender, _format_meal_reply(macros, new_totals))
 
 def _handle_undo(sender: str, dt: str, simulate: bool = False):
     resp = meals_tbl.query(KeyConditionExpression=Key("pk").eq(USER_ID) & Key("sk").begins_with(f"{dt}#"))
@@ -786,31 +717,18 @@ def _handle_reset_today(sender: str, dt: str, simulate: bool = False):
     _send_sms(sender, "Today’s totals have been reset to 0. (Meals remain.)")
 
 def _handle_migraine(sender: str, args: str, simulate: bool = False):
-    """
-    /migraine start [when] [category] [note...]
-    /migraine end [when] [note...]
-    """
     parts = args.strip().split()
     if not parts:
         _send_sms(sender, "Use `/migraine start ...` or `/migraine end ...`"); return
     sub = parts[0].lower()
 
     if sub == "start":
-        # try parse optional time (tokens until we hit a known category)
-        cat = "non-aura"
-        when_tokens = []
-        note_tokens = []
-        # find category mention
+        cat = "non-aura"; when_tokens = []; note_tokens = []
         for i, tok in enumerate(parts[1:], start=1):
             if tok.lower() in MIG_CATS:
-                cat = tok.lower()
-                when_tokens = parts[1:i]
-                note_tokens = parts[i+1:]
-                break
+                cat = tok.lower(); when_tokens = parts[1:i]; note_tokens = parts[i+1:]; break
         if not when_tokens and not note_tokens and len(parts) > 1:
-            # maybe only time or note given
             when_tokens = parts[1:]
-
         when_ms = _parse_when_to_ms(when_tokens)
         note = " ".join(note_tokens) if note_tokens else ""
         if simulate or DRY_RUN:
@@ -843,25 +761,21 @@ def _handle_meds(sender: str):
             lines.append(f"• {ck}: {used} days")
     _send_sms(sender, "\n".join(lines))
 
-
 def _handle_med(sender: str, args: str, simulate: bool = False):
     """
-    /med <free text>  (we’ll parse dose & time roughly)
+    /med <free text>
     Examples:
       /med sumatriptan 100mg
       /med zofran 4mg at 10pm
       /med ibuprofen 400mg yesterday 8am
     """
-    # pull out a trailing time phrase if present (very simple heuristics)
     tokens = args.strip().split()
     when_tokens = []
     text_tokens = tokens[:]
-    # heuristics: if ends with "am"/"pm" or "yesterday"/"today", treat last 1-2 tokens as time
     if tokens and tokens[-1].lower() in ("am","pm","yesterday","today"):
         when_tokens = tokens[-2:] if len(tokens) >= 2 else tokens[-1:]
         text_tokens = tokens[:-len(when_tokens)]
     elif re.match(r".*(\d{1,2}(:\d{2})?\s*(am|pm))$", args.lower()):
-        # crude, re-extract the time part
         m = re.search(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm))", args.lower())
         if m:
             when_tokens = [m.group(1)]
@@ -871,7 +785,7 @@ def _handle_med(sender: str, args: str, simulate: bool = False):
     text_after = " ".join(text_tokens).strip()
     if not text_after:
         _send_sms(sender, "Usage: /med <name/dose/when>"); return
-    
+
     if simulate or DRY_RUN:
         _send_sms(sender, f"[TEST] Would log med: {text_after} at {datetime.fromtimestamp(when_ms/1000, TZ).strftime('%-I:%M %p %Z')}")
         return
@@ -885,11 +799,11 @@ def lambda_handler(event, context):
         raw_text = (msg.get("text") or msg.get("body") or "").strip()
         sender = msg.get("sender") or msg.get("from") or ""
         meal_pk = msg.get("pk") or USER_ID
+
         simulate = False
         if raw_text.lower().startswith("/test "):
             simulate = True
             raw_text = raw_text[6:].strip()
-
 
         ts_ms = _parse_ts(msg.get("sk"))
         dt = _today_est_from_ts(ts_ms)  # EST day boundary
@@ -911,19 +825,18 @@ def lambda_handler(event, context):
             q = raw_text.split(":", 1)[1].strip() if ":" in raw_text else raw_text.split(" ", 1)[1].strip()
             _handle_lookup(sender, dt, q) if q else _send_sms(sender, "Usage: /lookup: <meal>")
         elif lower == "/undo":
-            _handle_undo(sender, dt, simulate=simulate)             # <<< add simulate
+            _handle_undo(sender, dt, simulate=simulate)
         elif lower == "/reset today":
-            _handle_reset_today(sender, dt, simulate=simulate)      # <<< add simulate
+            _handle_reset_today(sender, dt, simulate=simulate)
         elif lower == "/meds":
             _handle_meds(sender)
         elif lower.startswith("/migraine"):
-            _handle_migraine(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)  # <<< add simulate
+            _handle_migraine(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)
         elif lower.startswith("/med"):
-            _handle_med(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)       # <<< add simulate
+            _handle_med(sender, raw_text.split(" ", 1)[1] if " " in raw_text else "", simulate=simulate)
         elif lower.startswith("meal:") or lower.startswith("meal "):
             meal_text = raw_text.split(":", 1)[1].strip() if ":" in raw_text else raw_text.split(" ", 1)[1].strip()
-            _handle_meal(sender, dt, ts_ms, meal_pk, meal_text, simulate=simulate) if meal_text else _send_sms(sender, "Try: meal: greek yogurt + berries")  # <<< add simulate
-
+            _handle_meal(sender, dt, ts_ms, meal_pk, meal_text, simulate=simulate) if meal_text else _send_sms(sender, "Try: meal: greek yogurt + berries")
         else:
             _send_sms(sender, "Unrecognized. Send `meal: ...`, `/summary`, `/week`, `/month`, `/lookup: ...`, `/undo`, `/reset today`, `/migraine ...`, `/med ...`, or `/help`")
     return {"ok": True}
