@@ -614,19 +614,33 @@ def _start_migraine(sender: str, when_ms: int, cat: str, note: str):
 def _end_migraine(sender: str, when_ms: int, note: str):
     ep = _open_episode()
     if not ep:
-        _send_sms(sender, "No open migraine to end."); return
+        _send_sms(sender, "No open migraine to end.")
+        return
+
     key = {"pk": ep["pk"], "sk": ep["sk"]}
+
+    # merge notes safely in code (DDB can't concat strings)
+    existing = (ep.get("notes") or "").strip()
+    incoming = (note or "").strip()
+    combined = (existing + (" " if existing and incoming else "") + incoming).strip()
+
+    expr = "SET end_ms=:e, is_open=:z"
+    eav = {":e": _as_decimal(when_ms), ":z": _as_decimal(0)}
+
+    if combined:
+        expr += ", notes=:n"
+        eav[":n"] = combined
+
     migs_tbl.update_item(
         Key=key,
-        UpdateExpression="SET end_ms=:e, is_open=:z, notes = if_not_exists(notes, :n) || :sep || :n2",
-        ExpressionAttributeValues={
-            ":e": _as_decimal(when_ms), ":z": _as_decimal(0),
-            ":n": "", ":sep": " ", ":n2": note or ""
-        }
+        UpdateExpression=expr,
+        ExpressionAttributeValues=eav,
     )
+
     start_ms = int(ep.get("start_ms", 0))
-    dur_min = max(0, int((when_ms - start_ms)/60000))
+    dur_min = max(0, int((when_ms - start_ms) / 60000))
     _send_sms(sender, f"Migraine ended. Duration ≈ {dur_min} min.")
+
 
 # ---------- medication logging ----------
 MED_CATS = {
