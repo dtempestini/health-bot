@@ -15,31 +15,31 @@ phases:
 
   pre_build:
     commands:
+      # paths
       - ROOT="$CODEBUILD_SRC_DIR"
       - ENV_DIR="$ROOT/infra/envs/dev"
       - LAYER_DIR="$ROOT/lambda/requests-layer"
 
-      # zip may or may not be present
-      - command -v zip >/dev/null || ( (dnf -y install zip || yum -y install zip || apt-get update && apt-get install -y zip) || true )
-
-      - python3 -m pip install --upgrade pip
       # build requests layer
+      - yum -y install zip || true
+      - python3 -m pip install --upgrade pip
       - mkdir -p "$LAYER_DIR/python"
       - rm -f "$ROOT/lambda/requests-layer.zip" || true
       - python3 -m pip install requests -t "$LAYER_DIR/python"
       - (cd "$LAYER_DIR" && zip -r ../requests-layer.zip python >/dev/null)
       - test -f "$ROOT/lambda/requests-layer.zip" || (echo "Layer zip not created" && exit 1)
 
-      # package lambdas
+      # package lambdas used by TF
       - cd "$ENV_DIR"
       - rm -f lambda_ingest.zip lambda_meal_enricher.zip
-      - zip -j lambda_ingest.zip        lambda/ingest.py
+      - zip -j lambda_ingest.zip       lambda/ingest.py
       - zip -j lambda_meal_enricher.zip lambda/meal_enricher.py
+      - zip -j lambda_stats_api.zip      lambda/stats_api.py
 
+      # terraform init
       - terraform init -input=false
       - terraform fmt -recursive
       - terraform validate
-
 
   build:
     commands:

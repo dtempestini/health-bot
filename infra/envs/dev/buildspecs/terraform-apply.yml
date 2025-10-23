@@ -15,37 +15,35 @@ phases:
 
   pre_build:
     commands:
-      # paths
+      # resolve paths
       - ROOT="$CODEBUILD_SRC_DIR"
       - ENV_DIR="$ROOT/infra/envs/dev"
       - LAYER_DIR="$ROOT/lambda/requests-layer"
 
-      # the Plan stage artifact is mounted here by CodePipeline
+      # CodePipeline mounts the extra artifact as this env var:
       - PLAN_DIR="${CODEBUILD_SRC_DIR_plan_output}"
       - 'echo "Plan dir is: ${PLAN_DIR}"'
-      - '[ -n "${PLAN_DIR}" ] || { echo "ERROR: PLAN_DIR is empty (no plan artifact mounted)"; env | sort | grep CODEBUILD_SRC_DIR; exit 1; }'
+      - '[ -n "${PLAN_DIR}" ] || { echo "ERROR: PLAN_DIR is empty (no extra artifact mounted)"; env | sort | grep CODEBUILD_SRC_DIR; exit 1; }'
       - '[ -f "${PLAN_DIR}/infra/envs/dev/tfplan" ] || { echo "ERROR: plan file not found in artifact"; ls -R "${PLAN_DIR}"; exit 1; }'
 
-      # zip (handle al2023/ubuntu images)
-      - command -v zip >/dev/null || ( (dnf -y install zip || yum -y install zip || apt-get update && apt-get install -y zip) || true )
-
-      - python3 -m pip install --upgrade pip
-      
       # build requests layer
+      - yum -y install zip || true
+      - python3 -m pip install --upgrade pip
       - mkdir -p "$LAYER_DIR/python"
       - rm -f "$ROOT/lambda/requests-layer.zip" || true
       - python3 -m pip install requests -t "$LAYER_DIR/python"
-      - (cd "$LAYER_DIR" && zip -r ../requests-layer.zip python >/dev/null)
-      - test -f "$ROOT/lambda/requests-layer.zip" || (echo "Layer zip not created" && exit 1)
+      - '(cd "$LAYER_DIR" && zip -r ../requests-layer.zip python >/dev/null)'
+      - '[ -f "$ROOT/lambda/requests-layer.zip" ] || { echo "Layer zip not created"; exit 1; }'
 
-      # package lambdas used by TF
+      # package lambdas + init TF
       - cd "$ENV_DIR"
-      - rm -f lambda_ingest.zip lambda_meal_enricher.zip lambda_stats_api.zip
-      - zip -j lambda_ingest.zip         lambda/ingest.py
-      - zip -j lambda_meal_enricher.zip  lambda/meal_enricher.py
-      - if [ -f "lambda/stats_api.py" ]; then zip -j lambda_stats_api.zip lambda/stats_api.py; else echo "stats_api.py not present; skipping"; fi
-
-      # terraform init/validate against same workspace/backend
+      - rm -f lambda_ingest.zip lambda_meal_enricher.zip
+      - zip -j lambda_ingest.zip        lambda/ingest.py
+      - zip -j lambda_meal_enricher.zip lambda/meal_enricher.py
+      - zip -j lambda_stats_api.zip      lambda/stats_api.py
+      - mkdir -p "$ENV_DIR/lambda"
+      - cp "$ROOT/lambda/requests-layer.zip" "$ENV_DIR/lambda/requests-layer.zip"
+      - ls -l "$ENV_DIR/lambda"  # debug
       - terraform init -input=false
       - terraform fmt -recursive
       - terraform validate
@@ -55,5 +53,4 @@ phases:
 
   build:
     commands:
-      # Apply the previously generated plan
       - terraform apply -input=false -auto-approve "${ENV_DIR}/tfplan"
