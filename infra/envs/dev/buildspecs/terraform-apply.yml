@@ -29,6 +29,9 @@ phases:
       # build requests layer
       - yum -y install zip || true
       - python3 -m pip install --upgrade pip
+      - python3 -m pip install -r "$ROOT/requirements-dev.txt"
+      - cd "$ROOT" && python3 -m pytest
+      - cd "$ROOT"
       - mkdir -p "$LAYER_DIR/python"
       - rm -f "$ROOT/lambda/requests-layer.zip" || true
       - python3 -m pip install requests -t "$LAYER_DIR/python"

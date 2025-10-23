@@ -55,6 +55,82 @@ meds_tbl    = ddb.Table(MEDS_TABLE)
 TZ = ZoneInfo("America/New_York")
 
 # ---------- helpers ----------
+def _nx_headers():
+    sec = secrets.get_secret_value(SecretId=NUTRITION_SECRET_NAME)
+    cfg = json.loads(sec["SecretString"])
+    return {
+        "x-app-id": cfg["app_id"],
+        "x-app-key": cfg["app_key"],
+        "Content-Type": "application/json",
+    }
+
+def _extract_macros_from_food(it: dict) -> tuple[int,int,int,int,str]:
+    """Return kcal, protein_g, carbs_g, fat_g, display_name from a Nutritionix item dict."""
+    if not it: 
+        return 0,0,0,0,"item"
+    kcal = int(round(it.get("nf_calories", 0) or 0))
+    pro  = int(round(it.get("nf_protein", 0) or 0))
+    carb = int(round(it.get("nf_total_carbohydrate", 0) or 0))
+    fat  = int(round(it.get("nf_total_fat", 0) or 0))
+    # display name tries branded name then common
+    name = it.get("food_name") or it.get("brand_name_item_name") or "item"
+    return kcal, pro, carb, fat, name
+
+def _nutritionix_lookup_upc(upc: str) -> dict | None:
+    """
+    Try UPC → /search/item?upc. If 404/empty, fallback to instant search and hydrate via nix_item_id.
+    Returns a single Nutritionix 'food' dict or None.
+    """
+    headers = _nx_headers()
+
+    # 1) Primary UPC lookup
+    try:
+        r = requests.get(
+            f"https://trackapi.nutritionix.com/v2/search/item",
+            headers=headers,
+            params={"upc": upc},
+            timeout=10
+        )
+        if r.status_code == 200:
+            foods = (r.json() or {}).get("foods", []) or []
+            if foods:
+                return foods[0]
+        elif r.status_code not in (404, 400):
+            # unexpected error — surface it via None; caller will handle message
+            log.warning(f"UPC lookup HTTP {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        log.exception(f"UPC lookup exception: {e}")
+
+    # 2) Fallback: instant search (sometimes returns branded hits with nix_item_id)
+    try:
+        r2 = requests.get(
+            "https://trackapi.nutritionix.com/v2/search/instant",
+            headers={k:v for k,v in headers.items() if k != "Content-Type"},
+            params={"query": upc},
+            timeout=10
+        )
+        if r2.status_code == 200:
+            data = r2.json() or {}
+            branded = data.get("branded", []) or []
+            if branded:
+                nix_id = branded[0].get("nix_item_id")
+                if nix_id:
+                    r3 = requests.get(
+                        "https://trackapi.nutritionix.com/v2/search/item",
+                        headers=headers,
+                        params={"nix_item_id": nix_id},
+                        timeout=10
+                    )
+                    if r3.status_code == 200:
+                        foods = (r3.json() or {}).get("foods", []) or []
+                        if foods:
+                            return foods[0]
+    except Exception as e:
+        log.exception(f"Instant fallback exception: {e}")
+
+    return None
+
+
 def _norm_alias(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 
@@ -345,23 +421,32 @@ def _parse_macros_arg(s: str) -> dict | None:
     return out
 
 def _handle_barcode(sender: str, args: str):
-    upc = (args or "").strip().replace(" ", "")
-    if not upc.isdigit():
-        _send_sms(sender, "Usage: /barcode <digits>"); return
-    sec = secrets.get_secret_value(SecretId=NUTRITION_SECRET_NAME)
-    cfg = json.loads(sec["SecretString"])
-    headers = {"x-app-id": cfg["app_id"], "x-app-key": cfg["app_key"]}
-    url = f"https://trackapi.nutritionix.com/v2/search/item?upc={upc}"
-    r = requests.get(url, headers=headers, timeout=10)
-    if r.status_code != 200:
-        _send_sms(sender, f"Lookup failed ({r.status_code})."); return
-    it = r.json().get("foods", [{}])[0]
-    kcal = int(round(it.get("nf_calories", 0) or 0))
-    pro  = int(round(it.get("nf_protein", 0) or 0))
-    carb = int(round(it.get("nf_total_carbohydrate", 0) or 0))
-    fat  = int(round(it.get("nf_total_fat", 0) or 0))
-    name = it.get("food_name","item")
-    _send_sms(sender, f"Barcode: {name}\n{kcal} kcal ({pro}P / {carb}C / {fat}F)\nTip: /food set {name} k={kcal} p={pro} c={carb} f={fat}")
+    """
+    /barcode <digits>
+    Accepts EAN/UPC lengths (8, 12, 13, 14). Keeps leading zeros.
+    """
+    upc = "".join(ch for ch in (args or "") if ch.isdigit())
+    if not upc.isdigit() or len(upc) not in (8, 12, 13, 14):
+        _send_sms(sender, "Usage: /barcode <UPC/EAN digits> (8/12/13/14)."); 
+        return
+
+    item = _nutritionix_lookup_upc(upc)
+    if not item:
+        _send_sms(
+            sender, 
+            "Barcode not found. You can set it once and reuse:\n"
+            f"→ /food set item_{upc} k=<kcal> p=<P> c=<C> f=<F>\n"
+            "Then log: meal: item_{upc}"
+        )
+        return
+
+    kcal, pro, carb, fat, name = _extract_macros_from_food(item)
+    # Offer a one-tap save as custom food for reliability later
+    tip = f"/food set {name} k={kcal} p={pro} c={carb} f={fat}"
+    _send_sms(
+        sender,
+        f"Barcode: {name}\n{kcal} kcal ({pro}P / {carb}C / {fat}F)\nTip: {tip}"
+    )
 
 def _handle_food(sender: str, args: str):
     if not args:
@@ -385,8 +470,16 @@ def _handle_food(sender: str, args: str):
         return
 
     if sub == "set" and len(parts) >= 3:
-        alias = _norm_alias(parts[1])
-        macro_str = " ".join(parts[2:])
+        macro_start = None
+        for idx, token in enumerate(parts[2:], start=2):
+            if "=" in token:
+                macro_start = idx
+                break
+        if macro_start is None:
+            _send_sms(sender, "Provide macros, e.g. k=190 p=42 c=0 f=1"); return
+        alias_tokens = parts[1:macro_start] or [parts[1]]
+        alias = _norm_alias(" ".join(alias_tokens))
+        macro_str = " ".join(parts[macro_start:])
         macros = _parse_macros_arg(macro_str)
         if not macros or sum(macros.values()) == 0:
             _send_sms(sender, "Provide macros, e.g. k=190 p=42 c=0 f=1"); return
