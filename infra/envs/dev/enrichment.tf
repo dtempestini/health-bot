@@ -1,6 +1,6 @@
 ##
 ## PHASE 2: Meal Enricher + Daily Totals + WhatsApp replies
-## Tables: hb_meals_dev, hb_daily_totals_dev, hb_migraines_dev, hb_meds_dev
+## Tables: hb_meals_dev, hb_daily_totals_dev, hb_migraines_dev, hb_meds_dev, hb_fasting_dev
 ## Lambda: hb_meal_enricher_dev
 ## SNS sub: hb_meal_events_dev -> hb_meal_enricher_dev
 ##
@@ -16,28 +16,13 @@ resource "aws_dynamodb_table" "hb_food_overrides_dev" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute {
-    name = "pk"
-    type = "S"
-  }
+  attribute { name = "pk"; type = "S" }
+  attribute { name = "sk"; type = "S" }
 
-  attribute {
-    name = "sk"
-    type = "S"
-  }
+  point_in_time_recovery { enabled = true }
 
-  point_in_time_recovery {
-    enabled = true
-  }
-
-  tags = {
-    app   = "health-bot"
-    stack = "dev"
-    part  = "food_overrides"
-  }
+  tags = { app = "health-bot", stack = "dev", part = "food_overrides" }
 }
-
-
 
 resource "aws_dynamodb_table" "hb_meals_dev" {
   name         = "hb_meals_dev"
@@ -45,25 +30,12 @@ resource "aws_dynamodb_table" "hb_meals_dev" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute {
-    name = "pk"
-    type = "S"
-  }
+  attribute { name = "pk"; type = "S" }
+  attribute { name = "sk"; type = "S" }
 
-  attribute {
-    name = "sk"
-    type = "S"
-  }
+  point_in_time_recovery { enabled = true }
 
-  point_in_time_recovery {
-    enabled = true
-  }
-
-  tags = {
-    app   = "health-bot"
-    stack = "dev"
-    part  = "meals"
-  }
+  tags = { app = "health-bot", stack = "dev", part = "meals" }
 }
 
 # Daily totals (pattern: pk="total#me", sk="YYYY-MM-DD")
@@ -73,53 +45,27 @@ resource "aws_dynamodb_table" "hb_daily_totals_dev" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute {
-    name = "pk"
-    type = "S"
-  }
+  attribute { name = "pk"; type = "S" }
+  attribute { name = "sk"; type = "S" }
 
-  attribute {
-    name = "sk"
-    type = "S"
-  }
+  point_in_time_recovery { enabled = true }
 
-  point_in_time_recovery {
-    enabled = true
-  }
-
-  tags = {
-    app   = "health-bot"
-    stack = "dev"
-    part  = "totals"
-  }
+  tags = { app = "health-bot", stack = "dev", part = "totals" }
 }
 
 ################################
 # NEW: DynamoDB for migraines
 ################################
-# --- replace entire hb_migraines_dev with this ---
 resource "aws_dynamodb_table" "hb_migraines_dev" {
   name         = "hb_migraines_dev"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute {
-    name = "pk"
-    type = "S"
-  }
-  attribute {
-    name = "sk"
-    type = "S"
-  }
-  attribute {
-    name = "dt"
-    type = "S"
-  } # YYYY-MM-DD for start date
-  attribute {
-    name = "is_open"
-    type = "N"
-  } # 1 if not ended
+  attribute { name = "pk"; type = "S" }
+  attribute { name = "sk"; type = "S" }
+  attribute { name = "dt"; type = "S" }     # YYYY-MM-DD for start date
+  attribute { name = "is_open"; type = "N"} # 1 if not ended
 
   # Find open episode quickly
   global_secondary_index {
@@ -139,14 +85,8 @@ resource "aws_dynamodb_table" "hb_migraines_dev" {
 
   point_in_time_recovery { enabled = true }
 
-  tags = {
-    app   = "health-bot"
-    stack = "dev"
-    part  = "migraines"
-  }
+  tags = { app = "health-bot", stack = "dev", part = "migraines" }
 }
-
-
 
 ################################
 # NEW: DynamoDB for medications
@@ -157,20 +97,9 @@ resource "aws_dynamodb_table" "hb_meds_dev" {
   hash_key     = "pk" # user id
   range_key    = "sk" # "dt#<ms>"
 
-  attribute {
-    name = "pk"
-    type = "S"
-  }
-
-  attribute {
-    name = "sk"
-    type = "S"
-  }
-
-  attribute {
-    name = "dt"
-    type = "S"
-  } # YYYY-MM-DD
+  attribute { name = "pk"; type = "S" }
+  attribute { name = "sk"; type = "S" }
+  attribute { name = "dt"; type = "S" } # YYYY-MM-DD
 
   global_secondary_index {
     name            = "gsi_dt"
@@ -179,15 +108,44 @@ resource "aws_dynamodb_table" "hb_meds_dev" {
     projection_type = "ALL"
   }
 
-  point_in_time_recovery {
-    enabled = true
+  point_in_time_recovery { enabled = true }
+
+  tags = { app = "health-bot", stack = "dev", part = "meds" }
+}
+
+################################
+# NEW: DynamoDB for fasting
+################################
+resource "aws_dynamodb_table" "hb_fasting_dev" {
+  name         = "hb_fasting_dev"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute { name = "pk"; type = "S" }     # user id
+  attribute { name = "sk"; type = "S" }     # "fast#<id>"
+  attribute { name = "dt"; type = "S" }     # YYYY-MM-DD (start date)
+  attribute { name = "is_open"; type = "N"} # 1 when ongoing
+
+  # open fast lookup
+  global_secondary_index {
+    name            = "gsi_open"
+    hash_key        = "pk"
+    range_key       = "is_open"
+    projection_type = "ALL"
   }
 
-  tags = {
-    app   = "health-bot"
-    stack = "dev"
-    part  = "meds"
+  # date queries (week/month summaries)
+  global_secondary_index {
+    name            = "gsi_dt"
+    hash_key        = "dt"
+    range_key       = "sk"
+    projection_type = "ALL"
   }
+
+  point_in_time_recovery { enabled = true }
+
+  tags = { app = "health-bot", stack = "dev", part = "fasting" }
 }
 
 ############################
@@ -214,11 +172,7 @@ data "aws_dynamodb_table" "hb_events_dev" {
 resource "aws_iam_role" "hb_meal_enricher_dev" {
   name               = "hb-meal-enricher-dev"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
-
-  tags = {
-    app   = "health-bot"
-    stack = "dev"
-  }
+  tags               = { app = "health-bot", stack = "dev" }
 }
 
 resource "aws_iam_role_policy_attachment" "hb_meal_enricher_logs" {
@@ -238,7 +192,6 @@ data "aws_iam_policy_document" "meal_enricher_access" {
     actions   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:DescribeTable", "dynamodb:UpdateItem"]
     resources = [aws_dynamodb_table.hb_food_overrides_dev.arn]
   }
-
 
   statement {
     sid       = "TotalsRW"
@@ -269,7 +222,7 @@ data "aws_iam_policy_document" "meal_enricher_access" {
     ]
     resources = [
       aws_dynamodb_table.hb_meds_dev.arn,
-      "${aws_dynamodb_table.hb_meds_dev.arn}/index/*" # <— add this
+      "${aws_dynamodb_table.hb_meds_dev.arn}/index/*"
     ]
   }
 
@@ -285,10 +238,27 @@ data "aws_iam_policy_document" "meal_enricher_access" {
     ]
     resources = [
       aws_dynamodb_table.hb_migraines_dev.arn,
-      "${aws_dynamodb_table.hb_migraines_dev.arn}/index/*" # <— add this
+      "${aws_dynamodb_table.hb_migraines_dev.arn}/index/*"
     ]
   }
 
+  # NEW: fasting permissions (table + all GSIs)
+  statement {
+    sid = "FastingRW"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:Query",
+      "dynamodb:DescribeTable",
+      "dynamodb:BatchWriteItem"
+    ]
+    resources = [
+      aws_dynamodb_table.hb_fasting_dev.arn,
+      "${aws_dynamodb_table.hb_fasting_dev.arn}/index/*"
+    ]
+  }
 }
 
 resource "aws_iam_policy" "meal_enricher_access" {
@@ -319,7 +289,7 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
   role             = aws_iam_role.hb_meal_enricher_dev.arn
   handler          = "meal_enricher.lambda_handler"
   runtime          = "python3.12"
-  architectures    = ["x86_64"] # matches the CodeBuild layer arch
+  architectures    = ["x86_64"]
   filename         = "${path.module}/lambda_meal_enricher.zip"
   source_code_hash = filebase64sha256("${path.module}/lambda_meal_enricher.zip")
   publish          = true
@@ -331,12 +301,13 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
     variables = {
       USER_ID = "me"
 
-      MEALS_TABLE  = aws_dynamodb_table.hb_meals_dev.name
-      TOTALS_TABLE = aws_dynamodb_table.hb_daily_totals_dev.name
-      EVENTS_TABLE = data.aws_dynamodb_table.hb_events_dev.name
+      MEALS_TABLE   = aws_dynamodb_table.hb_meals_dev.name
+      TOTALS_TABLE  = aws_dynamodb_table.hb_daily_totals_dev.name
+      EVENTS_TABLE  = data.aws_dynamodb_table.hb_events_dev.name
 
       MIGRAINES_TABLE = aws_dynamodb_table.hb_migraines_dev.name
       MEDS_TABLE      = aws_dynamodb_table.hb_meds_dev.name
+      FASTING_TABLE   = aws_dynamodb_table.hb_fasting_dev.name   # NEW
 
       NUTRITION_SECRET_NAME = "hb_nutrition_api_key_dev"
       TWILIO_SECRET_NAME    = "hb_twilio_dev"
@@ -345,14 +316,10 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
       PROTEIN_MIN  = "190"
 
       FOOD_OVERRIDES_TABLE = aws_dynamodb_table.hb_food_overrides_dev.name
-
     }
   }
 
-  tags = {
-    app   = "health-bot"
-    stack = "dev"
-  }
+  tags = { app = "health-bot", stack = "dev" }
 }
 
 ############################
@@ -381,9 +348,7 @@ resource "aws_cloudwatch_metric_alarm" "meal_enricher_errors" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
 
-  dimensions = {
-    FunctionName = aws_lambda_function.hb_meal_enricher_dev.function_name
-  }
+  dimensions = { FunctionName = aws_lambda_function.hb_meal_enricher_dev.function_name }
 
   alarm_actions = [aws_sns_topic.ops_alarms_dev.arn]
   ok_actions    = [aws_sns_topic.ops_alarms_dev.arn]
