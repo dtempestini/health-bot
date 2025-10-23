@@ -400,6 +400,31 @@ def _handle_week(sender: str):
            f"Daily avg: {s['avg_cal']} kcal vs {CALORIES_MAX}, {s['avg_pro']} P vs {PROTEIN_MIN}.")
     _send_sms(sender, msg)
 
+def _count_med_doses_this_month(cat_key: str) -> int:
+    """Count total doses (items) this month for a given category."""
+    start, end = _month_bounds_est()
+    total = 0
+    d = start
+    while d <= end:
+        q = meds_tbl.query(
+            IndexName="gsi_dt",
+            KeyConditionExpression=Key("dt").eq(d.isoformat())
+        )
+        items = q.get("Items", [])
+        total += sum(1 for it in items if _med_category_key(it.get("category","")) == cat_key)
+
+        while "LastEvaluatedKey" in q:
+            q = meds_tbl.query(
+                IndexName="gsi_dt",
+                KeyConditionExpression=Key("dt").eq(d.isoformat()),
+                ExclusiveStartKey=q["LastEvaluatedKey"],
+            )
+            items = q.get("Items", [])
+            total += sum(1 for it in items if _med_category_key(it.get("category","")) == cat_key)
+
+        d += timedelta(days=1)
+    return total
+
 def _handle_month(sender: str):
     today = datetime.now(TZ).date()
     start = today.replace(day=1)
@@ -604,18 +629,20 @@ def _log_med(sender: str, when_ms: int, text_after: str):
         if any(rc == "triptan" and abs(when_ms - ts) < 24*60*60*1000 for rc, ts in recent_cats):
             warnings.append("⚠️ DHE should NOT be used within 24h of any triptan.")
 
-    # --- monthly limit checks (days used) ---
+    # --- monthly limit checks (doses used) ---
+    # Interpret *_LIMIT_DPM envs as *dose* limits per month now.
     limit = _med_limits_for(cat_key)
+    used_doses = None
     if limit:
-        used_days, day_set = _count_med_days_this_month(cat_key)
-        would_be = used_days if dt in day_set else used_days + 1
+        used_doses = _count_med_doses_this_month(cat_key)  # before inserting today's dose
+        would_be = used_doses + 1                          # include this dose
         pct = 0 if limit == 0 else round(would_be / limit, 2)
         if would_be > limit:
-            warnings.append(f"⚠️ Over monthly {cat_key} limit: {would_be}/{limit} days.")
+            warnings.append(f"⚠️ Over monthly {cat_key} dose limit: {would_be}/{limit}.")
         elif pct >= NEAR_THRESH_PCT:
-            warnings.append(f"⚠️ Approaching monthly {cat_key} limit: {would_be}/{limit} days.")
+            warnings.append(f"⚠️ Approaching monthly {cat_key} dose limit: {would_be}/{limit}.")
 
-    summary_note = f"{cat_key.capitalize()} this month: {used_days}/{limit} days." if limit else ""
+    summary_note = f"{cat_key.capitalize()} this month: {used_doses if used_doses is not None else 0}/{limit} dose(s)." if limit else ""
     msg_tail = " ".join(warnings).strip()
     _send_sms(
         sender,
@@ -688,6 +715,8 @@ def _handle_meal(sender: str, dt: str, ts_ms: int, meal_pk: str, text: str, simu
     new_totals = _update_totals(dt, macros)
     if sender: _send_sms(sender, _format_meal_reply(macros, new_totals))
 
+
+
 def _handle_undo(sender: str, dt: str, simulate: bool = False):
     resp = meals_tbl.query(KeyConditionExpression=Key("pk").eq(USER_ID) & Key("sk").begins_with(f"{dt}#"))
     items = resp.get("Items", [])
@@ -750,16 +779,17 @@ def _handle_migraine(sender: str, args: str, simulate: bool = False):
         _send_sms(sender, "Use `/migraine start ...` or `/migraine end ...`")
 
 def _handle_meds(sender: str):
-    cats = ["triptan","dhe","excedrin","normal pain med","other"]
-    lines = ["This month (med days used):"]
+    cats = ["triptan","dhe","excedrin","normal pain med","other","unknown"]
+    lines = ["This month (doses by category):"]
     for ck in cats:
-        used, _ = _count_med_days_this_month(ck)
+        doses = _count_med_doses_this_month(ck)
         lim = _med_limits_for(ck)
         if lim:
-            lines.append(f"• {ck}: {used} / {lim} days")
+            lines.append(f"• {ck}: {doses} / {lim} dose(s)")
         else:
-            lines.append(f"• {ck}: {used} days")
+            lines.append(f"• {ck}: {doses} dose(s)")
     _send_sms(sender, "\n".join(lines))
+
 
 def _handle_med(sender: str, args: str, simulate: bool = False):
     """
