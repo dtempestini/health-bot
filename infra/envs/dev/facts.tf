@@ -60,6 +60,13 @@ resource "aws_dynamodb_table" "hb_migraine_facts_dev" {
     enabled = true
   }
 
+  global_secondary_index {
+    name               = "gsi_dt"
+    hash_key           = "dt"
+    range_key          = "sk"
+    projection_type    = "ALL"
+  }
+
   lifecycle {
     prevent_destroy = true
   }
