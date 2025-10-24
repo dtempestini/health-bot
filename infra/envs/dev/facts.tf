@@ -14,14 +14,6 @@ resource "aws_s3_bucket" "facts" {
   bucket = local.facts_bucket
   force_destroy = true
 
-  server_side_encryption_configuration {
-    rule {
-      apply_server_side_encryption_by_default {
-        sse_algorithm = "AES256"
-      }
-    }
-  }
-
   tags = { app = "health-bot", stack = "dev", part = "facts" }
 }
 
@@ -84,7 +76,7 @@ resource "aws_dynamodb_table" "hb_migraine_facts_dev" {
 resource "aws_sqs_queue" "hb_fact_queue_dev" {
   name                        = "hb_fact_queue_dev"
   message_retention_seconds   = 1209600
-  visibility_timeout_seconds  = 30
+  visibility_timeout_seconds  = 120
   receive_wait_time_seconds   = 10
   tags = { app = "health-bot", stack = "dev", part = "facts" }
 }
