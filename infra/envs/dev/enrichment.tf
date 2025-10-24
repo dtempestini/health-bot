@@ -30,6 +30,9 @@ resource "aws_dynamodb_table" "hb_food_overrides_dev" {
     enabled = true
   }
 
+  # Prevent accidental data loss
+  lifecycle { prevent_destroy = true }
+
   tags = {
     app   = "health-bot"
     stack = "dev"
@@ -56,6 +59,8 @@ resource "aws_dynamodb_table" "hb_meals_dev" {
   point_in_time_recovery {
     enabled = true
   }
+
+  lifecycle { prevent_destroy = true }
 
   tags = {
     app   = "health-bot"
@@ -84,6 +89,8 @@ resource "aws_dynamodb_table" "hb_daily_totals_dev" {
   point_in_time_recovery {
     enabled = true
   }
+
+  lifecycle { prevent_destroy = true }
 
   tags = {
     app   = "health-bot"
@@ -141,6 +148,8 @@ resource "aws_dynamodb_table" "hb_migraines_dev" {
     enabled = true
   }
 
+  lifecycle { prevent_destroy = true }
+
   tags = {
     app   = "health-bot"
     stack = "dev"
@@ -182,6 +191,8 @@ resource "aws_dynamodb_table" "hb_meds_dev" {
   point_in_time_recovery {
     enabled = true
   }
+
+  lifecycle { prevent_destroy = true }
 
   tags = {
     app   = "health-bot"
@@ -238,6 +249,8 @@ resource "aws_dynamodb_table" "hb_fasting_dev" {
   point_in_time_recovery {
     enabled = true
   }
+
+  lifecycle { prevent_destroy = true }
 
   tags = {
     app   = "health-bot"
