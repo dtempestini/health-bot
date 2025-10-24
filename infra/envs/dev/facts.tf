@@ -88,7 +88,10 @@ resource "aws_sqs_queue" "hb_fact_queue_dev" {
 data "aws_iam_policy_document" "facts_ingest_assume" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals { type = "Service"; identifiers = ["lambda.amazonaws.com"] }
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
   }
 }
 
@@ -174,7 +177,10 @@ resource "aws_lambda_permission" "allow_s3_facts_ingest" {
 data "aws_iam_policy_document" "facts_sender_assume" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals { type = "Service"; identifiers = ["lambda.amazonaws.com"] }
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
   }
 }
 
