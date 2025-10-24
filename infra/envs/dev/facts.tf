@@ -3,10 +3,6 @@
 ##
 
 locals {
-  project_name = "health-bot"
-  env          = "dev"
-  region       = "us-east-1"
-
   facts_bucket = "hb-facts-dev"
   facts_prefix = "migraine/"
 }
@@ -20,7 +16,9 @@ resource "aws_s3_bucket" "facts" {
 
   server_side_encryption_configuration {
     rule {
-      apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+      apply_server_side_encryption_by_default {
+        sse_algorithm = "AES256"
+      }
     }
   }
 
@@ -29,7 +27,9 @@ resource "aws_s3_bucket" "facts" {
 
 resource "aws_s3_bucket_versioning" "facts" {
   bucket = aws_s3_bucket.facts.id
-  versioning_configuration { status = "Enabled" }
+  versioning_configuration {
+    status = "Enabled"
+  }
 }
 
 ############################
@@ -41,14 +41,34 @@ resource "aws_dynamodb_table" "hb_migraine_facts_dev" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  attribute { name = "pk"; type = "S" } # user id ("me")
-  attribute { name = "sk"; type = "S" } # "fact#<id>"
-  attribute { name = "dt"; type = "S" } # YYYY-MM-DD (ingested or last sent)
-  point_in_time_recovery { enabled = true }
+  attribute {
+    name = "pk" # user id ("me")
+    type = "S"
+  }
 
-  lifecycle { prevent_destroy = true }
+  attribute {
+    name = "sk" # "fact#<id>"
+    type = "S"
+  }
 
-  tags = { app = "health-bot", stack = "dev", part = "facts" }
+  attribute {
+    name = "dt" # YYYY-MM-DD (ingested or last sent)
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  tags = {
+    app   = "health-bot"
+    stack = "dev"
+    part  = "facts"
+  }
 }
 
 ############################
