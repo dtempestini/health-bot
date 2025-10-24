@@ -30,6 +30,8 @@ phases:
       - command -v zip >/dev/null || ( (dnf -y install zip || yum -y install zip || apt-get update && apt-get install -y zip) || true )
 
       - python3 -m pip install --upgrade pip
+      - python3 -m pip install -r "$ROOT/requirements-dev.txt"
+      - cd "$ROOT" && python3 -m pytest
 
       # build requests layer
       - mkdir -p "$LAYER_DIR/python"
@@ -40,10 +42,12 @@ phases:
 
       # package lambdas used by TF
       - cd "$ENV_DIR"
-      - rm -f lambda_ingest.zip lambda_meal_enricher.zip lambda_stats_api.zip
+      - rm -f lambda_ingest.zip lambda_meal_enricher.zip lambda_stats_api.zip lambda_facts_ingest.zip lambda_facts_sender.zip
       - zip -j lambda_ingest.zip         lambda/ingest.py
       - zip -j lambda_meal_enricher.zip  lambda/meal_enricher.py
-      - if [ -f "lambda/stats_api.py" ]; then zip -j lambda_stats_api.zip lambda/stats_api.py; else echo "stats_api.py not present; skipping"; fi
+      - zip -j lambda_stats_api.zip      lambda/stats_api.py
+      - zip -j lambda_facts_ingest.zip   lambda/facts_ingest.py
+      - zip -j lambda_facts_sender.zip   lambda/facts_sender.py
 
       # terraform init/validate (same workspace/backend)
       - terraform init -input=false

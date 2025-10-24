@@ -374,6 +374,21 @@ data "aws_iam_policy_document" "meal_enricher_access" {
       "${aws_dynamodb_table.hb_fasting_dev.arn}/index/*"
     ]
   }
+
+  statement {
+    sid = "FactsRW"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+      "dynamodb:DescribeTable"
+    ]
+    resources = [
+      aws_dynamodb_table.hb_migraine_facts_dev.arn,
+      "${aws_dynamodb_table.hb_migraine_facts_dev.arn}/index/*"
+    ]
+  }
 }
 
 resource "aws_iam_policy" "meal_enricher_access" {
@@ -423,6 +438,7 @@ resource "aws_lambda_function" "hb_meal_enricher_dev" {
       MIGRAINES_TABLE = aws_dynamodb_table.hb_migraines_dev.name
       MEDS_TABLE      = aws_dynamodb_table.hb_meds_dev.name
       FASTING_TABLE   = aws_dynamodb_table.hb_fasting_dev.name  # NEW
+      FACTS_TABLE     = aws_dynamodb_table.hb_migraine_facts_dev.name
 
       NUTRITION_SECRET_NAME = "hb_nutrition_api_key_dev"
       TWILIO_SECRET_NAME    = "hb_twilio_dev"
